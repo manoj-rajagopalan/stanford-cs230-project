@@ -716,7 +716,7 @@ def adjust_learning_rate(optimizer, step, num_steps):
 # Training
 ##########################################################################
 
-def train():
+def train(num_batches, train_dataloader, optimizer, net, criterion, val_dataset_iterator):
     counter = []
     loss_history = []
     lr = settings.learning_rate
@@ -1029,7 +1029,7 @@ def main():
 
         print("Start Training")
         # Train the model
-        model = train()
+        model = train(num_batches, train_dataloader, optimizer, net, criterion, val_dataset_iterator)
         torch.save(model.state_dict(), settings.model_path)
         print("Model Saved Successfully")
 
