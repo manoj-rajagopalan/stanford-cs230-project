@@ -1,0 +1,4 @@
+tensorboard
+torchvision
+torchsummary
+opencv-python
