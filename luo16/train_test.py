@@ -1,21 +1,17 @@
-'''  Pytorch implimentation of Efficient Deep Learning for Stereo Matching by  Wenjie Luo, Alexander G. Schwing, & Raquel Urtasun 
+'''  Pytorch implimentation of Efficient Deep Learning for Stereo Matching by  Wenjie Luo, Alexander G. Schwing, & Raquel Urtasun
 '''
 
 import os
-import random
-from random import shuffle
+import sys
 import glob
 import pickle
-from os.path import join
 
 from PIL import Image
-import PIL.ImageOps
 import numpy as np
 import matplotlib.pyplot as plt
-import IPython.display as display
 
 import logging
-from os.path import join, isfile
+from os.path import join
 import argparse
 import random
 from random import shuffle
@@ -44,32 +40,39 @@ import copy
 import datetime
 from pytz import timezone
 import pytz
+import cv2
+from torch.utils.tensorboard import SummaryWriter
+import torchsummary
 
 ##########################################################################
-# Load Settings 
+# Load Settings
 ##########################################################################
 
-if False: #'google.colab' in str(get_ipython()):
+if False: # 'google.colab' in str(get_ipython()):
     print("Running in colab mode")
+
+
     class Args:
         resume = False  # help='resume from checkpoint')
         data_path = '/content/kitti2015_full_min/'  # join('data', settings.dataset, settings.phase))
-        exp_name = '13x13'
+        exp_name = '37x37_ref'
         result_dir = 'results'  # result directory
         log_level = 'INFO'  # choices = ['DEBUG', 'INFO'], help='log-level to use')
-        batch_size = 128  # type=int, help='batch-size to use')
+        batch_size = 32  # type=int, help='batch-size to use')
         dataset = 'kitti_2015'  # , choices=['kitti_2012', 'kitti_2015'], help='dataset')
         seed = 3  # , type=int, help='random seed')
-        patch_size = 13  # , type=int, help='patch size from left image')
+        patch_size = 37  # , type=int, help='patch size from left image')
         disparity_range = 201  # , type=int, help='disparity range')
-        learning_rate = 0.02  # , type=float, help='initial learning rate')
+        learning_rate = 0.01  # , type=float, help='initial learning rate')
         reduction_factor = 25  # , type=int, help='ratio of the end learning rate to the starting learning rate')
         find_patch_locations = False  # , help='find and store patch locations')
         num_iterations = 1  # , type=int, help='number of training iterations')
         phase = 'both'  # , choices=['training', 'testing', 'both'], help='training or testing, if testing perform inference on test set.')
         post_process = False  # , help='toggle use of post-processing.')
         eval = False  # , help='compute error on validation set.')
-        test_all = True  # , help='run testing on all image pairs')
+        test_all = False  # , help='run testing on all image pairs')
+        max_batches = 100  # regardless of dataset size limit the number of batches
+        shuffle_images = False  # Shuffle the selection of images fed into the patch generator)
 
 
     settings = Args()
@@ -79,7 +82,7 @@ else:
         description='Re-implementation of Efficient Deep Learning for Stereo Matching')
     parser.add_argument('--resume', '-r', default=False, help='resume from checkpoint - not supported')
     parser.add_argument('--data-path', default='kitti_2015', type=str, help='root location of kitti_dataset')
-    parser.add_argument('--exp-name', default='testx', type=str, help='name of experiment')
+    parser.add_argument('--exp-name', default='bs_128_lr_0.2g', type=str, help='name of experiment')
     parser.add_argument('--result-dir', default='results', type=str, help='results directory')
     parser.add_argument('--log-level', default='INFO', choices=['DEBUG', 'INFO'], help='log-level to use')
     parser.add_argument('--batch-size', default=128, type=int, help='batch-size to use')
@@ -97,6 +100,10 @@ else:
     parser.add_argument('--post-process', default=False, help='toggle use of post-processing.')
     parser.add_argument('--eval', default=False, help='compute error on validation set.')
     parser.add_argument('--test-all', default=False, help='run testing on all image pairs')
+    parser.add_argument('--max-batches', default=100000, type=int,
+                        help='regardless of dataset size limit the number of batches')
+    parser.add_argument('--shuffle-images', default=False,
+                        help='Shuffle the selection of images fed into the patch generator')
 
     settings = parser.parse_args()
 
@@ -322,7 +329,8 @@ def find_and_store_patch_locations(settings):
         load_image_paths(settings.data_path, settings.left_img_folder,
                          settings.right_img_folder, settings.disparity_folder)
     sample_indices = list(range(len(left_image_paths)))
-    shuffle(sample_indices)
+    if settings.shuffle_images:
+        shuffle(sample_indices)
     train_ids = sample_indices[0:settings.num_train]
     val_ids = sample_indices[settings.num_train:]
 
@@ -573,45 +581,45 @@ class SiameseNetwork(nn.Module):
         # Setting up the Sequential of CNN Layers for 37x37 input patches
         self.cnn1 = nn.Sequential(
 
-            nn.Conv2d(3, 32, kernel_size=5),   # 1
+            nn.Conv2d(3, 32, kernel_size=5),  # 1
             nn.BatchNorm2d(32),
             nn.ReLU(inplace=True),
 
-            nn.Conv2d(32, 32, kernel_size=5),  #2
+            nn.Conv2d(32, 32, kernel_size=5),  # 2
             nn.BatchNorm2d(32),
             nn.ReLU(inplace=True),
 
-            nn.Conv2d(32, 64, kernel_size=5),  #3
+            nn.Conv2d(32, 64, kernel_size=5),  # 3
             nn.BatchNorm2d(64),
             nn.ReLU(inplace=True),
 
-            nn.Conv2d(64, 64, kernel_size=5),  #4
+            nn.Conv2d(64, 64, kernel_size=5),  # 4
             nn.BatchNorm2d(64),
             nn.ReLU(inplace=True),
 
-            nn.Conv2d(64, 64, kernel_size=5),  #5
+            nn.Conv2d(64, 64, kernel_size=5),  # 5
             nn.BatchNorm2d(64),
             nn.ReLU(inplace=True),
 
-            nn.Conv2d(64, 64, kernel_size=5),  #6
+            nn.Conv2d(64, 64, kernel_size=5),  # 6
             nn.BatchNorm2d(64),
             nn.ReLU(inplace=True),
 
-            nn.Conv2d(64, 64, kernel_size=5),  #7
+            nn.Conv2d(64, 64, kernel_size=5),  # 7
             nn.BatchNorm2d(64),
             nn.ReLU(inplace=True),
 
-            nn.Conv2d(64, 64, kernel_size=5),  #8
+            nn.Conv2d(64, 64, kernel_size=5),  # 8
             nn.BatchNorm2d(64),
             nn.ReLU(inplace=True),
 
-            nn.Conv2d(64, 64, kernel_size=5),  #9 - no ReLu on Output
+            nn.Conv2d(64, 64, kernel_size=5),  # 9 - no ReLu on Output
             nn.BatchNorm2d(64),
 
         )
 
     def forward(self, left_patch, right_patch):
-        left_feature  = self.cnn1(left_patch)
+        left_feature = self.cnn1(left_patch)
         right_feature = self.cnn1(right_patch)
         return left_feature, right_feature
 
@@ -623,21 +631,21 @@ class SiameseNetwork13(nn.Module):
         # Setting up the Sequential of CNN Layers for 13x13 input patches
         self.cnn1 = nn.Sequential(
 
-            nn.Conv2d(3, 32, kernel_size=5),   # 1
+            nn.Conv2d(3, 32, kernel_size=5),  # 1
             nn.BatchNorm2d(32),
             nn.ReLU(inplace=True),
 
-            nn.Conv2d(32, 32, kernel_size=5),  #2
+            nn.Conv2d(32, 32, kernel_size=5),  # 2
             nn.BatchNorm2d(32),
             nn.ReLU(inplace=True),
 
-            nn.Conv2d(32, 64, kernel_size=5),  #9 - no ReLu on Output
+            nn.Conv2d(32, 64, kernel_size=5),  # 9 - no ReLu on Output
             nn.BatchNorm2d(64),
 
         )
 
     def forward(self, left_patch, right_patch):
-        left_feature  = self.cnn1(left_patch)
+        left_feature = self.cnn1(left_patch)
         right_feature = self.cnn1(right_patch)
         return left_feature, right_feature
 
@@ -722,7 +730,7 @@ def train():
             loss_inner_product = criterion(left_feature, right_feature, labels)
             loss_inner_product.backward()
             optimizer.step()
-            if i % 100 == 0:
+            if i % 1000 == 0:
                 # Note validation set must be >= %1 of training set for iterator to not break when it runs out of validation data
                 left_patch, right_patch, labels = next(val_dataset_iterator)
                 left_patch, right_patch, labels = left_patch.cuda(), right_patch.cuda(), labels.cuda()
@@ -734,6 +742,8 @@ def train():
                     val_loss_inner_product.item()))
                 loss_history.append(loss_inner_product.item())
                 lr = adjust_learning_rate(optimizer, int(i / 100), int(num_batches / 100))
+            if i == settings.max_batches:
+                break
     return net
 
 
@@ -899,14 +909,14 @@ def calc_cost_volume(left_features, right_features, mask=None):
 
 
 def inference(left_features, right_features, post_process):
-    """Run model on test images.
+    """Post process model output.
 
     Args:
-        left_image (tf.Tensor): left input image.
-        right_image (tf.Tensor): right input image.
+        left_features (Tensor): left input cost volume.
+        right_features (Tensor): right input cost volume.
 
     Returns:
-        disp_prediction (tf.Tensor): disparity prediction.
+        disp_prediction (Tensor): disparity prediction.
 
     """
     cost_volume, win_indices = calc_cost_volume(left_features, right_features)
@@ -955,17 +965,34 @@ random.seed(settings.seed)
 patch_locations_loaded = 'patch_locations' in locals() or 'patch_locations' in globals()
 if not (patch_locations_loaded) or patch_locations == None:
     if not os.path.exists(settings.patch_locations_path):
-        print("New patch file being generatd")
+        print("New patch file being generated")
         find_and_store_patch_locations(settings)
     with open(settings.patch_locations_path, 'rb') as handle:
         print("Loading existing patch file")
         patch_locations = pickle.load(handle)
 else:
     print("Patch file already loaded")
-
+'''
+use_cuda = torch.cuda.is_available()
+device = torch.device("cuda:0" if use_cuda else "cpu")
+'''
+# Assign GPU
+if not torch.cuda.is_available():
+    print("GPU not available!")
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+torch.backends.cudnn.benchmark = True
+# Declare Siamese Network
+if settings.patch_size == 13:
+    net = SiameseNetwork13().cuda()
+    model = SiameseNetwork13().to(device)
+    torchsummary.summary(model, input_size=[(3, 13, 13), (3, 13, 213)])
+else:
+    net = SiameseNetwork().cuda()
+    model = SiameseNetwork().to(device)
+    torchsummary.summary(model, input_size=[(3, 37, 37), (3, 37, 237)])
+sys.stdout.flush()  # flush torchsummary.summary output
 
 if settings.phase == 'training' or settings.phase == 'both':
-
     training_dataset = SiameseDataset(settings, patch_locations['train'])
     # print("Batch Size : ", settings.batch_size)
     print("Loading training dataset")
@@ -988,38 +1015,20 @@ if settings.phase == 'training' or settings.phase == 'both':
     num_batches = len(train_dataloader)
     print("Number of ", settings.batch_size, "patch batches", num_batches)
 
-    use_cuda = torch.cuda.is_available()
-    device = torch.device("cuda:0" if use_cuda else "cpu")
-    torch.backends.cudnn.benchmark = True
-
-    # Declare Siamese Network
-    if settings.patch_size == 13:
-      net = SiameseNetwork13().cuda()
-    else:
-      net = SiameseNetwork().cuda()
     # Decalre Loss Function
     criterion = InnerProductLoss()
     # Declare Optimizer
     optimizer = torch.optim.Adam(net.parameters(), lr=settings.learning_rate)
 
-    if torch.cuda.is_available():
-        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-        print("Start Training")
-        # Train the model
-        model = train()
-        torch.save(model.state_dict(), settings.model_path)
-        print("Model Saved Successfully")
-    else:
-        print('Not running - GPU not available')
+    print("Start Training")
+    # Train the model
+    model = train()
+    torch.save(model.state_dict(), settings.model_path)
+    print("Model Saved Successfully")
 
 if settings.phase == 'testing' or settings.phase == 'both':
     print("Start Testing")
     # Load the saved model
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    if settings.patch_size == 13:
-      model = SiameseNetwork13().to(device)
-    else:
-      model = SiameseNetwork().to(device)
     model.load_state_dict(torch.load(settings.model_path))
     model.eval()  # required for batch normalization to function correctly
     patch_locations_loaded = 'patch_locations' in locals() or 'patch_locations' in globals()
@@ -1046,7 +1055,8 @@ if settings.phase == 'testing' or settings.phase == 'both':
         # two elements of the tuple specify the padding before / after the last dimension
         # while the third and forth elemements of the tuple specify the padding before / after
         # the second to last dimension
-        twoDimensionPad = (settings.half_patch_size, settings.half_patch_size, settings.half_patch_size, settings.half_patch_size)
+        twoDimensionPad = (
+        settings.half_patch_size, settings.half_patch_size, settings.half_patch_size, settings.half_patch_size)
         left_image = F.pad(left_image_in, twoDimensionPad, "constant", 0)
         right_image = F.pad(right_image, twoDimensionPad, "constant", 0)
         left_image = torch.unsqueeze(left_image, 0)
@@ -1062,14 +1072,16 @@ if settings.phase == 'testing' or settings.phase == 'both':
         error_dict[idx] = calc_error(disp_prediction.cpu(), disparity_ground_truth, idx)
         disp_image = prediction_to_image(disp_prediction.cpu())
         save_images([left_image_in.permute(1, 2, 0), disp_image], 1, ['left image', 'disparity'], settings.image_dir,
-                    ("00000"+str(idx))[-6:]+"_10.png")
-        #            'disparity_{}.png'.format(idx))
+                    'disparity_{}.png'.format(idx))
+        cv2.imwrite(join(settings.image_dir, (("00000" + str(idx))[-6:] + "_10.png")), np.array(disp_prediction.cpu()))
     if settings.test_all:
         for idx in train_image_indices:
             left_image_in = _load_image(left_image_paths[idx], settings.img_height, settings.img_width)
             right_image = _load_image(right_image_paths[idx], settings.img_height, settings.img_width)
-            disparity_ground_truth = _load_disparity(disparity_image_paths[idx], settings.img_height, settings.img_width)
-            twoDimensionPad = (settings.half_patch_size, settings.half_patch_size, settings.half_patch_size, settings.half_patch_size)
+            disparity_ground_truth = _load_disparity(disparity_image_paths[idx], settings.img_height,
+                                                     settings.img_width)
+            twoDimensionPad = (
+            settings.half_patch_size, settings.half_patch_size, settings.half_patch_size, settings.half_patch_size)
             left_image = F.pad(left_image_in, twoDimensionPad, "constant", 0)
             right_image = F.pad(right_image, twoDimensionPad, "constant", 0)
             left_image = torch.unsqueeze(left_image, 0)
@@ -1078,9 +1090,11 @@ if settings.phase == 'testing' or settings.phase == 'both':
             disp_prediction = inference(left_feature, right_feature, post_process=True)
             error_dict[idx] = calc_error(disp_prediction.cpu(), disparity_ground_truth, idx)
             disp_image = prediction_to_image(disp_prediction.cpu())
-            save_images([left_image_in.permute(1, 2, 0), disp_image], 1, ['left image', 'disparity'], settings.image_dir,
-                        ("00000"+str(idx))[-6:]+"_10.png")
-
+            save_images([left_image_in.permute(1, 2, 0), disp_image], 1, ['left image', 'disparity'],
+                        settings.image_dir,
+                        'disparity_{}.png'.format(idx))
+            cv2.imwrite(join(settings.image_dir, (("00000" + str(idx))[-6:] + "_10.png")),
+                        np.array(disp_prediction.cpu()))
     average_error = 0.0
     for idx in error_dict:
         average_error += error_dict[idx] / len(error_dict)
