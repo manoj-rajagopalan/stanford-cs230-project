@@ -1,4 +1,4 @@
-'''  Pytorch implimentation of Efficient Deep Learning for Stereo Matching by  Wenjie Luo, Alexander G. Schwing, & Raquel Urtasun
+'''  PyTorch implementation of Efficient Deep Learning for Stereo Matching by  Wenjie Luo, Alexander G. Schwing, & Raquel Urtasun
 '''
 
 import os
@@ -205,6 +205,9 @@ def load_image_paths(data_path, left_img_folder, right_img_folder,
     right_image_paths = sorted(glob.glob(join(data_path, right_img_folder, '*10.png')))
     disparity_image_paths = sorted(glob.glob(join(data_path, disparity_folder, '*10.png')))
 
+    assert len(left_image_paths) == len(right_image_paths)
+    assert len(left_image_paths) == len(disparity_image_paths)
+
     return left_image_paths, right_image_paths, disparity_image_paths
 
 
@@ -214,7 +217,7 @@ def _is_valid_location(sample_locations, img_width, img_height,
        is within the image.
 
     Args:
-        sample locations (tuple): the co-ordinates for the center of the left
+        sample locations (4-tuple): the co-ordinates for the center of the left
         and right patches.
         img_height (int): image height.
         img_width (int): image width.
@@ -952,150 +955,156 @@ def inference(left_features, right_features, post_process):
 # Main
 ##########################################################################
 
-# Python logging.
-LOGGER = logging.getLogger(__name__)
-exp_dir = join('experiments', '{}'.format(settings.exp_name))
-log_file = join(exp_dir, 'log.log')
-os.makedirs(exp_dir, exist_ok=True)
-os.makedirs(join(exp_dir, 'qualitative_samples'), exist_ok=True)
-setup_logging(log_path=log_file, log_level=settings.log_level, logger=LOGGER)
+def main():
 
-random.seed(settings.seed)
+    # Python logging.
+    LOGGER = logging.getLogger(__name__)
+    exp_dir = join('experiments', '{}'.format(settings.exp_name))
+    log_file = join(exp_dir, 'log.log')
+    os.makedirs(exp_dir, exist_ok=True)
+    os.makedirs(join(exp_dir, 'qualitative_samples'), exist_ok=True)
+    setup_logging(log_path=log_file, log_level=settings.log_level, logger=LOGGER)
 
-patch_locations_loaded = 'patch_locations' in locals() or 'patch_locations' in globals()
-if not (patch_locations_loaded) or patch_locations == None:
-    if not os.path.exists(settings.patch_locations_path):
-        print("New patch file being generated")
-        find_and_store_patch_locations(settings)
-    with open(settings.patch_locations_path, 'rb') as handle:
-        print("Loading existing patch file")
-        patch_locations = pickle.load(handle)
-else:
-    print("Patch file already loaded")
-'''
-use_cuda = torch.cuda.is_available()
-device = torch.device("cuda:0" if use_cuda else "cpu")
-'''
-# Assign GPU
-if not torch.cuda.is_available():
-    print("GPU not available!")
-device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-torch.backends.cudnn.benchmark = True
-# Declare Siamese Network
-if settings.patch_size == 13:
-    net = SiameseNetwork13().cuda()
-    model = SiameseNetwork13().to(device)
-    torchsummary.summary(model, input_size=[(3, 13, 13), (3, 13, 213)])
-else:
-    net = SiameseNetwork().cuda()
-    model = SiameseNetwork().to(device)
-    torchsummary.summary(model, input_size=[(3, 37, 37), (3, 37, 237)])
-sys.stdout.flush()  # flush torchsummary.summary output
+    random.seed(settings.seed)
 
-if settings.phase == 'training' or settings.phase == 'both':
-    training_dataset = SiameseDataset(settings, patch_locations['train'])
-    # print("Batch Size : ", settings.batch_size)
-    print("Loading training dataset")
-    train_dataloader = DataLoader(training_dataset,
-                                  shuffle=True,
-                                  num_workers=8,
-                                  batch_size=settings.batch_size)
-
-    val_dataset = SiameseDataset(settings, patch_locations['val'])
-
-    # print("Batch Size : ", settings.batch_size)
-    print("Loading validation dataset")
-    val_dataloader = DataLoader(val_dataset,
-                                shuffle=True,
-                                num_workers=2,
-                                batch_size=settings.batch_size)
-
-    val_dataset_iterator = iter(val_dataloader)
-
-    num_batches = len(train_dataloader)
-    print("Number of ", settings.batch_size, "patch batches", num_batches)
-
-    # Decalre Loss Function
-    criterion = InnerProductLoss()
-    # Declare Optimizer
-    optimizer = torch.optim.Adam(net.parameters(), lr=settings.learning_rate)
-
-    print("Start Training")
-    # Train the model
-    model = train()
-    torch.save(model.state_dict(), settings.model_path)
-    print("Model Saved Successfully")
-
-if settings.phase == 'testing' or settings.phase == 'both':
-    print("Start Testing")
-    # Load the saved model
-    model.load_state_dict(torch.load(settings.model_path))
-    model.eval()  # required for batch normalization to function correctly
     patch_locations_loaded = 'patch_locations' in locals() or 'patch_locations' in globals()
     if not (patch_locations_loaded) or patch_locations == None:
+        if not os.path.exists(settings.patch_locations_path):
+            print("New patch file being generated")
+            find_and_store_patch_locations(settings)
         with open(settings.patch_locations_path, 'rb') as handle:
+            print("Loading existing patch file")
             patch_locations = pickle.load(handle)
+    else:
+        print("Patch file already loaded")
+    '''
+    use_cuda = torch.cuda.is_available()
+    device = torch.device("cuda:0" if use_cuda else "cpu")
+    '''
+    # Assign GPU
+    if not torch.cuda.is_available():
+        print("GPU not available!")
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    torch.backends.cudnn.benchmark = True
+    # Declare Siamese Network
+    if settings.patch_size == 13:
+        net = SiameseNetwork13().cuda()
+        model = SiameseNetwork13().to(device)
+        torchsummary.summary(model, input_size=[(3, 13, 13), (3, 13, 213)])
+    else:
+        net = SiameseNetwork().cuda()
+        model = SiameseNetwork().to(device)
+        torchsummary.summary(model, input_size=[(3, 37, 37), (3, 37, 237)])
+    sys.stdout.flush()  # flush torchsummary.summary output
 
-    test_image_indices = patch_locations['val']['ids']
-    train_image_indices = patch_locations['train']['ids']
+    if settings.phase == 'training' or settings.phase == 'both':
+        training_dataset = SiameseDataset(settings, patch_locations['train'])
+        # print("Batch Size : ", settings.batch_size)
+        print("Loading training dataset")
+        train_dataloader = DataLoader(training_dataset,
+                                      shuffle=True,
+                                      num_workers=8,
+                                      batch_size=settings.batch_size)
 
-    counter = 0
-    left_image_paths, right_image_paths, disparity_image_paths = load_image_paths(settings.data_path,
-                                                                                  settings.left_img_folder,
-                                                                                  settings.right_img_folder,
-                                                                                  settings.disparity_folder)
+        val_dataset = SiameseDataset(settings, patch_locations['val'])
 
-    error_dict = {}
-    for idx in test_image_indices:
-        left_image_in = _load_image(left_image_paths[idx], settings.img_height, settings.img_width)
-        right_image = _load_image(right_image_paths[idx], settings.img_height, settings.img_width)
-        disparity_ground_truth = _load_disparity(disparity_image_paths[idx], settings.img_height, settings.img_width)
+        # print("Batch Size : ", settings.batch_size)
+        print("Loading validation dataset")
+        val_dataloader = DataLoader(val_dataset,
+                                    shuffle=True,
+                                    num_workers=2,
+                                    batch_size=settings.batch_size)
 
-        # two DimenionPad specified from last to first the padding on the dimesion, so the first
-        # two elements of the tuple specify the padding before / after the last dimension
-        # while the third and forth elemements of the tuple specify the padding before / after
-        # the second to last dimension
-        twoDimensionPad = (
-        settings.half_patch_size, settings.half_patch_size, settings.half_patch_size, settings.half_patch_size)
-        left_image = F.pad(left_image_in, twoDimensionPad, "constant", 0)
-        right_image = F.pad(right_image, twoDimensionPad, "constant", 0)
-        left_image = torch.unsqueeze(left_image, 0)
-        right_image = torch.unsqueeze(right_image, 0)
-        # print("Left image size  : ", left_image.size())
-        # print("Right image size : ", right_image.size())
-        # left_feature, right_feature = model(left_image.to(device), right_image.to(device))
-        left_feature, right_feature = model(left_image.to(device), right_image.to(device))
-        # print("Left feature size  : ", left_feature.size())
-        # print("Right feature size : ", right_feature.size())
-        # print("Left Feature on Cuda: ", left_feature.get_device())
-        disp_prediction = inference(left_feature, right_feature, post_process=True)
-        error_dict[idx] = calc_error(disp_prediction.cpu(), disparity_ground_truth, idx)
-        disp_image = prediction_to_image(disp_prediction.cpu())
-        save_images([left_image_in.permute(1, 2, 0), disp_image], 1, ['left image', 'disparity'], settings.image_dir,
-                    'disparity_{}.png'.format(idx))
-        cv2.imwrite(join(settings.image_dir, (("00000" + str(idx))[-6:] + "_10.png")), np.array(disp_prediction.cpu()))
-    if settings.test_all:
-        for idx in train_image_indices:
+        val_dataset_iterator = iter(val_dataloader)
+
+        num_batches = len(train_dataloader)
+        print("Number of ", settings.batch_size, "patch batches", num_batches)
+
+        # Decalre Loss Function
+        criterion = InnerProductLoss()
+        # Declare Optimizer
+        optimizer = torch.optim.Adam(net.parameters(), lr=settings.learning_rate)
+
+        print("Start Training")
+        # Train the model
+        model = train()
+        torch.save(model.state_dict(), settings.model_path)
+        print("Model Saved Successfully")
+
+    if settings.phase == 'testing' or settings.phase == 'both':
+        print("Start Testing")
+        # Load the saved model
+        model.load_state_dict(torch.load(settings.model_path))
+        model.eval()  # required for batch normalization to function correctly
+        patch_locations_loaded = 'patch_locations' in locals() or 'patch_locations' in globals()
+        if not (patch_locations_loaded) or patch_locations == None:
+            with open(settings.patch_locations_path, 'rb') as handle:
+                patch_locations = pickle.load(handle)
+
+        test_image_indices = patch_locations['val']['ids']
+        train_image_indices = patch_locations['train']['ids']
+
+        counter = 0
+        left_image_paths, right_image_paths, disparity_image_paths = load_image_paths(settings.data_path,
+                                                                                      settings.left_img_folder,
+                                                                                      settings.right_img_folder,
+                                                                                      settings.disparity_folder)
+
+        error_dict = {}
+        for idx in test_image_indices:
             left_image_in = _load_image(left_image_paths[idx], settings.img_height, settings.img_width)
             right_image = _load_image(right_image_paths[idx], settings.img_height, settings.img_width)
-            disparity_ground_truth = _load_disparity(disparity_image_paths[idx], settings.img_height,
-                                                     settings.img_width)
+            disparity_ground_truth = _load_disparity(disparity_image_paths[idx], settings.img_height, settings.img_width)
+
+            # two DimenionPad specified from last to first the padding on the dimesion, so the first
+            # two elements of the tuple specify the padding before / after the last dimension
+            # while the third and forth elemements of the tuple specify the padding before / after
+            # the second to last dimension
             twoDimensionPad = (
             settings.half_patch_size, settings.half_patch_size, settings.half_patch_size, settings.half_patch_size)
             left_image = F.pad(left_image_in, twoDimensionPad, "constant", 0)
             right_image = F.pad(right_image, twoDimensionPad, "constant", 0)
             left_image = torch.unsqueeze(left_image, 0)
             right_image = torch.unsqueeze(right_image, 0)
+            # print("Left image size  : ", left_image.size())
+            # print("Right image size : ", right_image.size())
+            # left_feature, right_feature = model(left_image.to(device), right_image.to(device))
             left_feature, right_feature = model(left_image.to(device), right_image.to(device))
+            # print("Left feature size  : ", left_feature.size())
+            # print("Right feature size : ", right_feature.size())
+            # print("Left Feature on Cuda: ", left_feature.get_device())
             disp_prediction = inference(left_feature, right_feature, post_process=True)
             error_dict[idx] = calc_error(disp_prediction.cpu(), disparity_ground_truth, idx)
             disp_image = prediction_to_image(disp_prediction.cpu())
-            save_images([left_image_in.permute(1, 2, 0), disp_image], 1, ['left image', 'disparity'],
-                        settings.image_dir,
+            save_images([left_image_in.permute(1, 2, 0), disp_image], 1, ['left image', 'disparity'], settings.image_dir,
                         'disparity_{}.png'.format(idx))
-            cv2.imwrite(join(settings.image_dir, (("00000" + str(idx))[-6:] + "_10.png")),
-                        np.array(disp_prediction.cpu()))
-    average_error = 0.0
-    for idx in error_dict:
-        average_error += error_dict[idx] / len(error_dict)
-    print("Average Error : ", average_error)
+            cv2.imwrite(join(settings.image_dir, (("00000" + str(idx))[-6:] + "_10.png")), np.array(disp_prediction.cpu()))
+        if settings.test_all:
+            for idx in train_image_indices:
+                left_image_in = _load_image(left_image_paths[idx], settings.img_height, settings.img_width)
+                right_image = _load_image(right_image_paths[idx], settings.img_height, settings.img_width)
+                disparity_ground_truth = _load_disparity(disparity_image_paths[idx], settings.img_height,
+                                                         settings.img_width)
+                twoDimensionPad = (
+                settings.half_patch_size, settings.half_patch_size, settings.half_patch_size, settings.half_patch_size)
+                left_image = F.pad(left_image_in, twoDimensionPad, "constant", 0)
+                right_image = F.pad(right_image, twoDimensionPad, "constant", 0)
+                left_image = torch.unsqueeze(left_image, 0)
+                right_image = torch.unsqueeze(right_image, 0)
+                left_feature, right_feature = model(left_image.to(device), right_image.to(device))
+                disp_prediction = inference(left_feature, right_feature, post_process=True)
+                error_dict[idx] = calc_error(disp_prediction.cpu(), disparity_ground_truth, idx)
+                disp_image = prediction_to_image(disp_prediction.cpu())
+                save_images([left_image_in.permute(1, 2, 0), disp_image], 1, ['left image', 'disparity'],
+                            settings.image_dir,
+                            'disparity_{}.png'.format(idx))
+                cv2.imwrite(join(settings.image_dir, (("00000" + str(idx))[-6:] + "_10.png")),
+                            np.array(disp_prediction.cpu()))
+        average_error = 0.0
+        for idx in error_dict:
+            average_error += error_dict[idx] / len(error_dict)
+        print("Average Error : ", average_error)
+
+
+if __name__ == "__main__":
+    main()
