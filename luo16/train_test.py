@@ -433,6 +433,7 @@ def _load_images(left_image_paths, right_image_paths, disparity_paths, img_heigh
         if disparity_paths:
             disparity_images.append(_load_disparity(disparity_paths[idx], img_height, img_width))
 
+    print('_load_images: Loaded', len(left_images), 'images')
     return (left_images, right_images, np.array(disparity_images))
 
 
@@ -720,7 +721,7 @@ def train():
     loss_history = []
     lr = settings.learning_rate
 
-    print("Number of iterrations : ", settings.num_iterations)
+    print("Number of iterations : ", settings.num_iterations)
     for epoch in range(settings.num_iterations):
         # print ("Epoch : ", epoch)
         for i, data in enumerate(train_dataloader, 0):
@@ -1000,6 +1001,7 @@ def main():
     if settings.phase == 'training' or settings.phase == 'both':
         training_dataset = SiameseDataset(settings, patch_locations['train'])
         # print("Batch Size : ", settings.batch_size)
+        print('training_dataset size = ', len(training_dataset))
         print("Loading training dataset")
         train_dataloader = DataLoader(training_dataset,
                                       shuffle=True,
@@ -1007,7 +1009,7 @@ def main():
                                       batch_size=settings.batch_size)
 
         val_dataset = SiameseDataset(settings, patch_locations['val'])
-
+        print('training_dataset size = ', len(training_dataset))
         # print("Batch Size : ", settings.batch_size)
         print("Loading validation dataset")
         val_dataloader = DataLoader(val_dataset,
