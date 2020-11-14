@@ -84,6 +84,7 @@ else:
     parser.add_argument('--data-path', default='kitti_2015', type=str, help='root location of kitti_dataset')
     parser.add_argument('--exp-name', default='bs_128_lr_0.2g', type=str, help='name of experiment')
     parser.add_argument('--result-dir', default='results', type=str, help='results directory')
+    parser.add_argument('--experiments-dir', default='experiments', type=str, help='experiments directory')
     parser.add_argument('--log-level', default='INFO', choices=['DEBUG', 'INFO'], help='log-level to use')
     parser.add_argument('--batch-size', default=128, type=int, help='batch-size to use')
     parser.add_argument('--dataset', default='kitti_2015', choices=['kitti_2012', 'kitti_2015'], help='dataset')
@@ -879,20 +880,20 @@ def calc_cost_volume(left_features, right_features, mask=None):
 
     """
     inner_product, win_indices = [], []
-    img_height, img_width = right_feature.shape[2], right_feature.shape[3]
+    img_height, img_width = right_features.shape[2], right_features.shape[3]
     # print("right feature shape : ", right_feature.size())
     row_indices = torch.arange(0, img_width, dtype=torch.int64)
 
     for i in range(img_width):
         # print("left feature shape before squeeze : ", left_feature.size())
-        left_column_features = torch.squeeze(left_feature[:, :, :, i])
+        left_column_features = torch.squeeze(left_features[:, :, :, i])
         # print("left feature shape after squeeze  : ", left_column_features.size())
         start_win = max(0, i - settings.half_range)
         end_win = max(settings.disparity_range, settings.half_range + i + 1)
         start_win = start_win - max(0, end_win - img_width)  # was img_width.value
         end_win = min(img_width, end_win)
 
-        right_win_features = torch.squeeze(right_feature[:, :, :, start_win:end_win])
+        right_win_features = torch.squeeze(right_features[:, :, :, start_win:end_win])
         win_indices_column = torch.unsqueeze(row_indices[start_win:end_win], 0)
         # print("left feature shape      : ", left_column_features.size())
         # print("right win feature shape : ", right_win_features.size())
@@ -956,11 +957,13 @@ def inference(left_features, right_features, post_process):
 # Main
 ##########################################################################
 
+device = 'unknown'
+
 def main():
 
     # Python logging.
     LOGGER = logging.getLogger(__name__)
-    exp_dir = join('experiments', '{}'.format(settings.exp_name))
+    exp_dir = join(settings.experiments_dir, '{}'.format(settings.exp_name))
     log_file = join(exp_dir, 'log.log')
     os.makedirs(exp_dir, exist_ok=True)
     os.makedirs(join(exp_dir, 'qualitative_samples'), exist_ok=True)
@@ -985,7 +988,9 @@ def main():
     # Assign GPU
     if not torch.cuda.is_available():
         print("GPU not available!")
+    global device
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    print('Using device', device)
     torch.backends.cudnn.benchmark = True
     # Declare Siamese Network
     if settings.patch_size == 13:
