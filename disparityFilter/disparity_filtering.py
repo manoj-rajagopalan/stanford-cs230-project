@@ -1,5 +1,7 @@
 '''  Pytorch implimentation of Efficient Deep Learning for Stereo Matching by  Wenjie Luo, Alexander G. Schwing, & Raquel Urtasun
 '''
+##### Note this version has been stripped down to only input disp_37x37 without the other channels.
+##### Note this version does not pass the input disparity through the loss function.
 
 import os
 import sys
@@ -49,29 +51,29 @@ import torchsummary
 # Load Settings
 ##########################################################################
 
-if False: #'google.colab' in str(get_ipython()):
+if False: 'google.colab' in str(get_ipython()):
     print("Running in colab mode")
 
 
     class Args:
         resume = False  # help='resume from checkpoint')
         data_path = '/content/kitti2015_plus'  # join('data', settings.dataset, settings.phase))
-        exp_name = '32bs'
+        exp_name = 'Urun6'
         result_dir = 'results'  # result directory
         log_level = 'INFO'  # choices = ['DEBUG', 'INFO'], help='log-level to use')
-        batch_size = 32  # type=int, help='batch-size to use')
+        batch_size = 4  # type=int, help='batch-size to use')
         seed = 3  # , type=int, help='random seed')
-        patch_height = 48  # , type=int, help='patch height')
-        patch_width = 48  # , type=int, help='patch width')
+        patch_height = 316  # , type=int, help='patch height')
+        patch_width = 316  # , type=int, help='patch width')
         num_patches = 100000  # , type=int, help='number of patches to train on')
         patch_overlap = 0  # , type=int, help='patch height')
-        learning_rate = 0.001  # , type=float, help='initial learning rate')
-        reduction_factor = 25  # , type=int, help='ratio of the end learning rate to the starting learning rate')
+        learning_rate = 0.00001  # , type=float, help='initial learning rate')
+        reduction_factor = 50  # , type=int, help='ratio of the end learning rate to the starting learning rate')
         find_patch_locations = False  # , help='find and store patch locations')
         num_iterations = 1  # , type=int, help='number of training iterations')
         phase = 'both'  # , choices=['training', 'testing', 'both'], help='training or testing, if testing perform inference on test set.')
         eval = False  # , help='compute error on validation set.')
-        test_all = True  # , help='run testing on all image pairs')
+        test_all = False  # , help='run testing on all image pairs')
         max_batches = 100000  # regardless of dataset size limit the number of batches
         shuffle_images = False  # Shuffle the selection of images fed into the patch generator)
         tensor_summary = False  # Enable the display of the tensor summary)
@@ -84,16 +86,16 @@ else:
         description='Re-implementation of Efficient Deep Learning for Stereo Matching')
     parser.add_argument('--resume', '-r', default=False, help='resume from checkpoint - not supported')
     parser.add_argument('--data-path', default='kitti2015_plus', type=str, help='root location of kitti_dataset')
-    parser.add_argument('--exp-name', default='df_test1', type=str, help='name of experiment')
+    parser.add_argument('--exp-name', default='exp_name, type=str, help='name of experiment')
     parser.add_argument('--result-dir', default='results', type=str, help='results directory')
     parser.add_argument('--log-level', default='INFO', choices=['DEBUG', 'INFO'], help='log-level to use')
-    parser.add_argument('--batch-size', default=128, type=int, help='batch-size to use')
+    parser.add_argument('--batch-size', default=4, type=int, help='batch-size to use')
     parser.add_argument('--seed', default=3, type=int, help='random seed')
-    parser.add_argument('--patch-height', default=48, type=int, help='patch height')
-    parser.add_argument('--patch-width', default=48, type=int, help='patch width')
+    parser.add_argument('--patch-height', default=316, type=int, help='patch height')
+    parser.add_argument('--patch-width', default=316, type=int, help='patch width')
     parser.add_argument('--num-patches', default=100000, type=int, help='number of training patches')
     parser.add_argument('--patch-overlap', default=0, type=int, help='overlap between patches')
-    parser.add_argument('--learning-rate', default=0.02, type=float, help='initial learning rate')
+    parser.add_argument('--learning-rate', default=0.0001, type=float, help='initial learning rate')
     parser.add_argument('--reduction-factor', default=50, type=int,
                         help='ratio of the end learning rate to the starting learning rate')
     parser.add_argument('--find-patch-locations', default=False, help='find and store patch locations')
@@ -118,7 +120,9 @@ setattr(settings, 'img_width', 1224)
 setattr(settings, 'num_train', 160)
 setattr(settings, 'left_img_folder', 'image_2')
 setattr(settings, 'right_img_folder', 'image_3')
-setattr(settings, 'disparity_folder', 'disp_noc_0')
+setattr(settings, 'disparity_folder', 'disp_fnoc_0')
+setattr(settings, 'ground_truth_folder', 'disp_noc_0')
+setattr(settings, 'dmask_folder', 'disp_mask_0')
 setattr(settings, 'disp_13x13_folder', 'disp_13x13')
 setattr(settings, 'disp_37x37_folder', 'disp_37x37')
 setattr(settings, 'num_val', 40)
@@ -188,7 +192,7 @@ def setup_logging(log_path=None, log_level='DEBUG', logger=None, fmt=LOG_FORMAT)
 # Input Pre Procesing
 ##########################################################################
 
-def load_image_paths(data_path, left_img_folder, disparity_folder,
+def load_image_paths(data_path, left_img_folder, disparity_folder, dmask_folder,
                      disp_13x13_folder, disp_37x37_folder):
     """Load paths to images.
 
@@ -204,10 +208,11 @@ def load_image_paths(data_path, left_img_folder, disparity_folder,
     """
     left_image_paths = sorted(glob.glob(join(data_path, left_img_folder, '*10.png')))
     disparity_image_paths = sorted(glob.glob(join(data_path, disparity_folder, '*10.png')))
+    dmask_image_paths = sorted(glob.glob(join(data_path, dmask_folder, '*10.png')))
     disp_13x13_image_paths = sorted(glob.glob(join(data_path, disp_13x13_folder, '*10.png')))
     disp_37x37_image_paths = sorted(glob.glob(join(data_path, disp_37x37_folder, '*10.png')))
 
-    return left_image_paths, disparity_image_paths, disp_13x13_image_paths, disp_37x37_image_paths
+    return left_image_paths, disparity_image_paths, dmask_image_paths, disp_13x13_image_paths, disp_37x37_image_paths
 
 
 def _is_valid_location(sample_locations, img_width, img_height,
@@ -354,10 +359,11 @@ def find_and_store_patch_locations(settings):
         Nothing
 
     """
-    left_image_paths, disparity_paths, disp_13x13_paths, disp_37x37_paths = \
+    left_image_paths, disparity_paths, dmask_paths, disp_13x13_paths, disp_37x37_paths = \
         load_image_paths(settings.data_path,
                          settings.left_img_folder,
                          settings.disparity_folder,
+                         settings.dmask_folder,
                          settings.disp_13x13_folder,
                          settings.disp_37x37_folder)
     sample_indices = list(range(len(left_image_paths)))
@@ -439,6 +445,31 @@ def _load_disparity(image_path, img_height, img_width):
     return disp_img
 
 
+def _load_blended_disparity(ground_truth_path, mask_path, estimate_path, img_height, img_width):
+    """Load disparity image as numpy array.
+
+    Args:
+        image_path (str): path to disparity image.
+        img_height (int): desired height of output image (excess trimmed).
+        img_width (int): desired width of output image (excess trimmed).
+
+    Returns:
+        disp_img (numpy.ndarray): disparity image array as tensor.
+
+    """
+    mask_img = np.array(Image.open(mask_path))
+    mask_img = trim_image(mask_img, img_height, img_width)
+    invert_mask = (mask_img == 0) * 1
+    est_img = np.array(Image.open(estimate_path))
+    est_img = trim_image(est_img, img_height, img_width)
+    disp_img = np.array(Image.open(ground_truth_path)).astype('float64')
+    disp_img = trim_image(disp_img, img_height, img_width)
+    disp_img /= 256
+    disp_img = disp_img + invert_mask * est_img
+
+    return disp_img
+
+
 def _load_disp_XxX(image_path, img_height, img_width):
     """Load disparity image as numpy array.
 
@@ -493,20 +524,26 @@ def _load_images(left_image_paths, disparity_paths, disp_13x13_paths, disp_37x37
     return (left_images, np.array(disparity_images), np.array(disp_13x13_images), np.array(disp_37x37_images))
 
 
-def get_concat_image_w_disparity(settings, idx):
+def get_concat_image_w_disparity(settings, idx, blended=True):
     """
     """
-    left_image_paths, disparity_paths, disp_13x13_paths, disp_37x37_paths = \
+    left_image_paths, disparity_image_paths, dmask_image_paths, disp_13x13_image_paths, disp_37x37_image_paths = \
         load_image_paths(settings.data_path,
                          settings.left_img_folder,
                          settings.disparity_folder,
+                         settings.dmask_folder,
                          settings.disp_13x13_folder,
                          settings.disp_37x37_folder)
 
+    ground_truth_paths = sorted(glob.glob(join(settings.data_path, settings.ground_truth_folder, '*10.png')))
     img_height = settings.img_height
     img_width = settings.img_width
     left_image = _load_image(left_image_paths[idx], img_height, img_width)
-    disparity_image = _load_disparity(disparity_paths[idx], img_height, img_width)
+    if blended:
+        disparity_image = _load_blended_disparity(disparity_image_paths[idx], dmask_image_paths[idx],
+                                                  disp_37x37_image_paths[idx], img_height, img_width)
+    else:
+        disparity_image = _load_disparity(ground_truth_paths[idx], img_height, img_width)
     disp_13x13_image = _load_disp_XxX(disp_13x13_paths[idx], img_height, img_width)
     disp_37x37_image = _load_disp_XxX(disp_37x37_paths[idx], img_height, img_width)
 
@@ -550,10 +587,11 @@ class DisparityDataset(Dataset):
 
         """
         self._settings = settings
-        left_image_paths, disparity_paths, disp_13x13_paths, disp_37x37_paths = \
+        left_image_paths, disparity_paths, dmask_paths, disp_13x13_paths, disp_37x37_paths = \
             load_image_paths(settings.data_path,
                              settings.left_img_folder,
                              settings.disparity_folder,
+                             settings.dmask_folder,
                              settings.disp_13x13_folder,
                              settings.disp_37x37_folder)
 
@@ -810,6 +848,150 @@ class FilterNet(nn.Module):
         return x
 
 
+class UNet(nn.Module):
+
+    def build_block(self, in_channels, out_channels, kernel_size, padding, upsample=False, relu=True):
+        block = [
+            nn.Conv2d(in_channels=in_channels, out_channels=out_channels, kernel_size=kernel_size, padding=padding,
+                      bias=True),
+            # nn.BatchNorm2d(num_features=out_channels),
+            nn.ReLU(inplace=True),
+            # nn.Conv2d(in_channels=out_channels, out_channels=out_channels, kernel_size=3, padding=1, bias=True),
+            # nn.ReLU(inplace=True),
+        ]
+        if upsample:
+            block.append(nn.Upsample(scale_factor=2, mode='bilinear', align_corners=True))
+        return nn.Sequential(*block)
+
+    def __init__(self):
+        super().__init__()
+
+        self.down1 = self.build_block(in_channels=1, out_channels=64, kernel_size=3, padding=0)
+        self.down2 = self.build_block(in_channels=64, out_channels=64, kernel_size=3, padding=0)
+        self.pool1 = nn.MaxPool2d(kernel_size=2)
+
+        self.down3 = self.build_block(in_channels=64, out_channels=128, kernel_size=3, padding=0)
+        self.down4 = self.build_block(in_channels=128, out_channels=128, kernel_size=3, padding=0)
+        self.pool2 = nn.MaxPool2d(kernel_size=2)
+
+        self.down5 = self.build_block(in_channels=128, out_channels=256, kernel_size=3, padding=0)
+        self.down6 = self.build_block(in_channels=256, out_channels=256, kernel_size=3, padding=0)
+        self.pool3 = nn.MaxPool2d(kernel_size=2)
+
+        self.down7 = self.build_block(in_channels=256, out_channels=512, kernel_size=3, padding=0)
+        self.down8 = self.build_block(in_channels=512, out_channels=512, kernel_size=3, padding=0)
+        self.pool4 = nn.MaxPool2d(kernel_size=2)
+
+        self.down9 = self.build_block(in_channels=512, out_channels=1024, kernel_size=3, padding=0)
+        self.down10 = self.build_block(in_channels=1024, out_channels=512, kernel_size=3, padding=0, upsample=True)
+
+        self.up1 = self.build_block(in_channels=1024, out_channels=512, kernel_size=3, padding=0)
+        self.up2 = self.build_block(in_channels=512, out_channels=256, kernel_size=3, padding=0, upsample=True)
+
+        self.up3 = self.build_block(in_channels=512, out_channels=256, kernel_size=3, padding=0)
+        self.up4 = self.build_block(in_channels=256, out_channels=128, kernel_size=3, padding=0, upsample=True)
+
+        self.up5 = self.build_block(in_channels=256, out_channels=128, kernel_size=3, padding=0)
+        self.up6 = self.build_block(in_channels=128, out_channels=64, kernel_size=3, padding=0, upsample=True)
+
+        self.up7 = self.build_block(in_channels=128, out_channels=64, kernel_size=3, padding=0)
+        self.up8 = self.build_block(in_channels=64, out_channels=64, kernel_size=3, padding=0)
+
+        self.final_conv = nn.Conv2d(in_channels=64, out_channels=1, kernel_size=1, padding=0, bias=True)
+
+    def forward(self, x):
+        # print("input size ", x.size())
+
+        x = self.down1(x)
+        # print("down 1 output size ", x.size())
+        c1 = self.down2(x)
+        # print("down 2 output size ", x.size())
+        x = self.pool1(c1)
+        # print("pool 1 output size ", x.size())
+
+        # print("down 4 input size ", x.size())
+
+        x = self.down3(x)
+        c2 = self.down4(x)
+        x = self.pool2(c2)
+
+        # print("down 4 input size ", x.size())
+
+        x = self.down5(x)
+        c3 = self.down6(x)
+        x = self.pool3(c3)
+
+        # print("down 10 input size ", x.size())
+
+        x = self.down7(x)
+        c4 = self.down8(x)
+        x = self.pool4(c4)
+
+        # print("down 13 input size ", x.size())
+
+        x = self.down9(x)
+        # print("down 1 output size ", x.size())
+        x = self.down10(x)
+        # print("down 1 output size ", x.size())
+
+        # print("C4 size ",c4.size())
+        # print("down 15 output size ", x.size())
+        # print("C4 reduced size ",c4[:,:,6:-6,6:-6].size())
+
+        x = torch.cat([x, c4[:, :, 4:-4, 4:-4]], dim=1)
+        x = self.up1(x)
+        x = self.up2(x)
+
+        x = torch.cat([x, c3[:, :, 16:-16, 16:-16]], dim=1)
+        x = self.up3(x)
+        x = self.up4(x)
+
+        x = torch.cat([x, c2[:, :, 40:-40, 40:-40]], dim=1)
+        x = self.up5(x)
+        x = self.up6(x)
+
+        x = torch.cat([x, c1[:, :, 88:-88, 88:-88]], dim=1)
+        x = self.up7(x)
+        x = self.up8(x)
+
+        x = self.final_conv(x)
+        return x
+
+    def output_size(self, input_size):
+        '''  Calculate output image size based upon input size and network configuration.
+        #FIXME - constants should be moved to __init__ and should be parameters which
+        configure the shape of the UNet for hyperparameter search.
+        '''
+        kernel_size = 3
+        cnns_per_stage = 2
+        depth = 4
+        scale_factor_per_stage = 2
+
+        f = (kernel_size - 1) * cnns_per_stage * depth
+        y, x = input_size
+        for _ in range(depth - 1):
+            x = (x - (kernel_size - 1) * cnns_per_stage) / scale_factor_per_stage
+            y = (y - (kernel_size - 1) * cnns_per_stage) / scale_factor_per_stage
+            f = (f + (kernel_size - 1) * cnns_per_stage) * scale_factor_per_stage
+        if x % 2 == 1:
+            x_smaller = int(x)
+            x_larger = x_smaller + 1
+            for _ in range(depth - 1):
+                x_smaller = (x_smaller + (kernel_size - 1) * cnns_per_stage) * scale_factor_per_stage
+                x_larger = (x_larger + (kernel_size - 1) * cnns_per_stage) * scale_factor_per_stage
+            print("Invalid Input width, valid sizes are ", x_smaller, "and", x_larger)
+        if y % 2 == 1:
+            y_smaller = int(y)
+            y_larger = y_smaller + 1
+            for _ in range(depth - 1):
+                y_smaller = (y_smaller + (kernel_size - 1) * cnns_per_stage) * scale_factor_per_stage
+                y_larger = (y_larger + (kernel_size - 1) * cnns_per_stage) * scale_factor_per_stage
+            print("Invalid Input width, valid sizes are ", y_smaller, "and", y_larger)
+        y, x = input_size
+
+        return (y - f, x - f)
+
+
 ##########################################################################
 # Loss Function
 ##########################################################################
@@ -845,19 +1027,19 @@ class ImageDeltaLoss(torch.nn.Module):
         # print("output_volume size        : ", output_volume.size())
         # print("input_volume size         : ", input_volume.size())
         output_disparity = torch.squeeze(output_volume[:, -1, :, :])
-        input_disparity = torch.squeeze(input_volume[:, -1, :, :])
+        # input_disparity = torch.squeeze(input_volume[:, -1, :, :])
         # print("output_disparity size     : ", output_disparity.size())
         # print("input_disparity size      : ", input_disparity.size())
-        net_disparity = output_disparity.add(input_disparity)
+        net_disparity = output_disparity
         # threshold = Variable(torch.Tensor([0.0]).to(device)  # threshold
         # threshold.to(device)
         # tensor_mask = (labels > threshold).float()
         # tensor_mask.to(device)
-        masked_net_disparity = net_disparity * torch.ceil(labels / 256).float()
-        disparity_error = torch.abs(masked_net_disparity - labels)
-        three_pixel_disparity = F.threshold(disparity_error, 3, 0)
-        loss = torch.log(torch.sum(torch.ceil(three_pixel_disparity / 256).float()) + 1)
-        # loss = F.mse_loss(masked_net_disparity, labels)
+        # masked_net_disparity = net_disparity * torch.ceil(labels[:,92:-92,92:-92] / 256).float()
+        # disparity_error = torch.abs(masked_net_disparity - labels[:,92:-92,92:-92])
+        # three_pixel_disparity = F.threshold(disparity_error, 3, 0)
+        # loss = torch.log(torch.sum(torch.ceil(three_pixel_disparity / 256).float()) + 1)
+        loss = F.mse_loss(net_disparity, labels[:, 92:-92, 92:-92])
         # loss = F.mse_loss(net_disparity, labels)
 
         # left_feature = torch.squeeze(left_feature)
@@ -901,6 +1083,8 @@ def train(model):
         for i, data in enumerate(train_dataloader, 0):
             # print("Batch : ", i)
             input_volume, labels = data
+            input_volume = torch.unsqueeze(input_volume[:, -1, :, :], 1)
+            # print("Input Size : ", input_volume.size())
             if i % 9999999 == 0:
                 net_disparity = torch.squeeze(input_volume[:, -1, :, :])
                 masked_net_disparity = net_disparity * torch.ceil(labels / 256).float()
@@ -910,6 +1094,9 @@ def train(model):
                 three_pixel_disparity = F.threshold(disparity_error, 3, 0)
                 print("Input Error : ", torch.sum(three_pixel_disparity))
             # print("Data Size : ", left_patch.size())
+            # print("Input Size : ", input_volume.size())
+            # input_volume = input_volume[:,-1,:,:]
+            # print("Input Size post reduction: ", input_volume.size())
             input_volume, labels = input_volume.cuda(), labels.cuda()
             optimizer.zero_grad()
             output_volume = model(input_volume)
@@ -918,6 +1105,7 @@ def train(model):
             optimizer.step()
             if i % 100 == 0:
                 # Note validation set must be >= %1 of training set for iterator to not break when it runs out of validation data
+                '''
                 input_volume, labels = next(val_dataset_iterator)
 
                 net_disparity = torch.squeeze(input_volume[:, -1, :, :])
@@ -929,9 +1117,10 @@ def train(model):
                 optimizer.zero_grad()
                 output_volume = model(input_volume)
                 val_loss_image_delta = criterion(output_volume, input_volume, labels)
+                '''
                 print("{}, Epoch: {}, Batch: {}, Learning Rate: {}, Training loss: {}, Validation loss: {}".format(
                     datetime.datetime.now(tz=pytz.utc), epoch, i, lr, loss_image_delta.item(),
-                    val_loss_image_delta.item()))
+                    'placeholder'))
                 loss_history.append(loss_image_delta.item())
                 lr = adjust_learning_rate(optimizer, int(i / 100), int(num_batches / 100))
             if i == settings.max_batches:
@@ -1166,7 +1355,8 @@ if not (patch_locations_loaded) or patch_locations == None:
 else:
     print("Patch file already loaded")
 '''
-find_and_store_patch_locations(settings)
+if settings.phase == 'training' or settings.phase == 'both':
+    find_and_store_patch_locations(settings)
 with open(settings.patch_locations_path, 'rb') as handle:
     patch_locations = pickle.load(handle)
 
@@ -1175,7 +1365,9 @@ if not torch.cuda.is_available():
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 torch.backends.cudnn.benchmark = True
 # Declare Network for training
-model = FilterNet()
+model = UNet()
+# Calculate output dimentions before moving structure to GPU
+output_height, output_width = model.output_size((settings.patch_height, settings.patch_width))
 # Create Model Instance for
 model = model.to(device)
 # Print out Model Summary
@@ -1222,7 +1414,7 @@ if settings.phase == 'testing' or settings.phase == 'both':
     print("Start Testing")
     # Load the saved model
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    # model = FilterNet().to(get_device)
+    # model = UNet().to(get_device)
     model.load_state_dict(torch.load(settings.model_path))
     model.eval()  # required for batch normalization to function correctly
 
@@ -1238,25 +1430,40 @@ if settings.phase == 'testing' or settings.phase == 'both':
     train_image_indices = patch_locations['train']['ids']
 
     counter = 0
-    left_image_paths, disparity_paths, disp_13x13_paths, disp_37x37_paths = \
+    left_image_paths, disparity_paths, dmask_paths, disp_13x13_paths, disp_37x37_paths = \
         load_image_paths(settings.data_path,
                          settings.left_img_folder,
                          settings.disparity_folder,
+                         settings.dmask_folder,
                          settings.disp_13x13_folder,
                          settings.disp_37x37_folder)
+
     error_dict = {}
     for idx in test_image_indices:
-        left_image, input_volume, disparity_ground_truth = get_concat_image_w_disparity(settings, idx)
+        left_image, input_volume, disparity_ground_truth = get_concat_image_w_disparity(settings, idx, blended=False)
+        # print("Input size  : ", input_volume.size())
+        input_volume = torch.unsqueeze(input_volume[-1, :, :], 0)
+        # print("Input size (post -1 on channel) : ", input_volume.size())
         # right_image = _load_image(right_image_paths[idx], settings.img_height, settings.img_width)
-        # disparity_ground_truth = _load_disparity(disparity_image_paths[idx], settings.img_height, settings.img_width)
 
         # two DimenionPad specified from last to first the padding on the dimesion, so the first
         # two elements of the tuple specify the padding before / after the last dimension
         # while the third and forth elemements of the tuple specify the padding before / after
         # the second to last dimension
 
-        twoDimensionPad = (0, 0, 1, 1)
-        input_volume = F.pad(input_volume, twoDimensionPad, "constant", 0)
+        # twoDimensionPad = (0, 0, 1, 1)
+        # input_volume = F.pad(input_volume, twoDimensionPad, "constant", 0)
+        upper_left_y = settings.img_height - settings.patch_height
+        lower_right_y = upper_left_y + settings.patch_height
+        upper_left_x = int((settings.img_width - settings.patch_width) / 2)
+        lower_right_x = upper_left_x + settings.patch_width
+        input_volume = input_volume[:, upper_left_y:lower_right_y, upper_left_x:lower_right_x]
+
+        upper_left_y = upper_left_y + int((settings.patch_height - output_height) / 2)
+        lower_right_y = upper_left_y + output_height
+        upper_left_x = upper_left_x + int((settings.patch_width - output_width) / 2)
+        lower_right_x = upper_left_x + output_width
+        disparity_ground_truth = disparity_ground_truth[upper_left_y:lower_right_y, upper_left_x:lower_right_x]
         # right_image = F.pad(right_image, twoDimensionPad, "constant", 0)
         # left_image = torch.unsqueeze(left_image, 0)
         # right_image = torch.unsqueeze(right_image, 0)
@@ -1265,19 +1472,20 @@ if settings.phase == 'testing' or settings.phase == 'both':
         # print("Right image size : ", right_image.size())
         # left_feature, right_feature = model(left_image.to(device), right_image.to(device))
         input_volume = input_volume.cuda()
+        # print("Input Volume size pre unsqueeze: ", input_volume.size())
         input_volume = torch.unsqueeze(input_volume, 0)
+        # print("Input Volume size : ", input_volume.size())
         output_volume = model(input_volume.to(device))
-        disparity_prediction = torch.squeeze(output_volume)  # torch.squeeze(output_volume[-1,:,:])
         output_disparity = torch.squeeze(output_volume)
         input_disparity = torch.squeeze(input_volume[:, -1, :, :])
-        disparity_prediction = output_disparity.add(input_disparity)
+        disparity_prediction = output_disparity  # .add(input_disparity[92:-92,92:-92])
         # print("output_disparity size     : ", output_disparity.size())
         # print("input_disparity size      : ", input_disparity.size())
         # print("Left feature size  : ", left_feature.size())
         # print("Right feature size : ", right_feature.size())
         # print("Left Feature on Cuda: ", left_feature.get_device())
         disparity_prediction = disparity_prediction.cpu().detach().numpy()
-        disparity_prediction = disparity_prediction[1:settings.img_height + 1, :]
+        # disparity_prediction = disparity_prediction[1:settings.img_height + 1, :]
         # print("Average : ", np.mean(disparity_prediction))
         # print("Max     : ", np.max(disparity_prediction))
         # print("Min     : ", np.min(disparity_prediction))
@@ -1286,27 +1494,47 @@ if settings.phase == 'testing' or settings.phase == 'both':
         save_images([left_image.permute(1, 2, 0), disp_image], 1, ['left image', 'disparity'], settings.image_dir,
                     'disparity_{}.png'.format(idx))
         cv2.imwrite(join(settings.image_dir, (("00000" + str(idx))[-6:] + "_10.png")), disparity_prediction)
-        #            ("00000"+str(idx))[-6:]+"_10.png")
-    '''
+
+    average_error = 0.0
+    for idx in error_dict:
+        average_error += error_dict[idx] / len(error_dict)
+    print("Average Test Error : ", average_error)
+
     if settings.test_all:
         for idx in train_image_indices:
-            left_image_in = _load_image(left_image_paths[idx], settings.img_height, settings.img_width)
-            right_image = _load_image(right_image_paths[idx], settings.img_height, settings.img_width)
-            disparity_ground_truth = _load_disparity(disparity_image_paths[idx], settings.img_height, settings.img_width)
-            twoDimensionPad = (settings.half_patch_size, settings.half_patch_size, settings.half_patch_size, settings.half_patch_size)
-            left_image = F.pad(left_image_in, twoDimensionPad, "constant", 0)
-            right_image = F.pad(right_image, twoDimensionPad, "constant", 0)
-            left_image = torch.unsqueeze(left_image, 0)
-            right_image = torch.unsqueeze(right_image, 0)
-            left_feature, right_feature = model(left_image.to(device), right_image.to(device))
-            disp_prediction = inference(left_feature, right_feature, post_process=True)
-            error_dict[idx] = calc_error(disp_prediction.cpu(), disparity_ground_truth, idx)
-            disp_image = prediction_to_image(disp_prediction.cpu())
+            left_image, input_volume, disparity_ground_truth = get_concat_image_w_disparity(settings, idx,
+                                                                                            blended=False)
+            input_volume = torch.unsqueeze(input_volume[-1, :, :], 0)
+
+            upper_left_y = settings.img_height - settings.patch_height
+            lower_right_y = upper_left_y + settings.patch_height
+            upper_left_x = int((settings.img_width - settings.patch_width) / 2)
+            lower_right_x = upper_left_x + settings.patch_width
+            input_volume = input_volume[:, upper_left_y:lower_right_y, upper_left_x:lower_right_x]
+
+            output_patch_size = 132
+            upper_left_y = upper_left_y + int((settings.patch_width - output_patch_size) / 2)
+            lower_right_y = upper_left_y + output_patch_size
+            upper_left_x = upper_left_x + int((settings.patch_width - output_patch_size) / 2)
+            lower_right_x = upper_left_x + output_patch_size
+            disparity_ground_truth = disparity_ground_truth[upper_left_y:lower_right_y, upper_left_x:lower_right_x]
+
+            input_volume = input_volume.cuda()
+            input_volume = torch.unsqueeze(input_volume, 0)
+            output_volume = model(input_volume.to(device))
+            output_disparity = torch.squeeze(output_volume)
+            input_disparity = torch.squeeze(input_volume[:, -1, :, :])
+            disparity_prediction = output_disparity  # .add(input_disparity[92:-92,92:-92])
+
+            disparity_prediction = disparity_prediction.cpu().detach().numpy()
+            error_dict[idx] = calc_error(disparity_prediction, disparity_ground_truth, idx)
+            '''
+            disp_image = prediction_to_image(disparity_prediction)
             save_images([left_image_in.permute(1, 2, 0), disp_image], 1, ['left image', 'disparity'], settings.image_dir,
                     'disparity_{}.png'.format(idx))
             cv2.imwrite(join(settings.image_dir, (("00000"+str(idx))[-6:]+"_10.png")), np.array(disp_prediction.cpu()))
-        #            ("00000"+str(idx))[-6:]+"_10.png")
-    '''
+            '''
+
     average_error = 0.0
     for idx in error_dict:
         average_error += error_dict[idx] / len(error_dict)
