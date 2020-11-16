@@ -1,4 +1,9 @@
+import matplotlib
+matplotlib.use('agg')
+
+import matplotlib.pyplot as plt
 import numpy as np
+
 
 def trim_image(img, img_height, img_width):
     """Trim image to remove pixels on the right and bottom.
@@ -116,3 +121,49 @@ def _load_images(left_image_paths, right_image_paths, disparity_paths, img_heigh
     return (left_images, right_images, np.array(disparity_images))
 
 # /_load_images()
+
+def save_images(images, cols, titles, directory, filename):
+    """Save multiple images arranged as a table.
+
+    Args:
+        images (list): list of images to display as numpy arrays.
+        cols (int): number of columns.
+        titles (list): list of title strings for each image.
+        iteration (int): iteration counter or plot interval.
+
+    """
+    assert ((titles is None) or (len(images) == len(titles)))
+    n_images = len(images)
+    if titles is None: titles = ['Image (%d)' % i for i in range(1, n_images + 1)]
+    fig = plt.figure(figsize=(20, 10))
+    for n, (image, title) in enumerate(zip(images, titles)):
+        a = fig.add_subplot(cols, np.ceil(n_images / float(cols)), n + 1)
+        image = np.squeeze(image)
+        if image.ndim == 2:
+            plt.gray()
+        plt.imshow(image)
+
+        a.axis('off')
+        a.set_title(title, fontsize=40)
+    fig.set_size_inches(np.array(fig.get_size_inches()) * n_images)
+    plt.savefig(join(directory, filename), bbox_inches='tight')
+    plt.close(fig)
+
+# /save_images()
+
+def prediction_to_image(disp_prediction):
+    """
+    Args:
+        disp_prediction (Tensor): disparity prediction.
+
+    Returns:
+        image (float): PNG formatted image
+
+    """
+    disp_img = np.array(disp_prediction)
+    disp_img[disp_img < 0] = 0
+    cmap = plt.cm.jet
+    norm = plt.Normalize(vmin=disp_img.min(), vmax=disp_img.max())
+    return cmap(norm(disp_img))
+
+# /prediction_to_images()
