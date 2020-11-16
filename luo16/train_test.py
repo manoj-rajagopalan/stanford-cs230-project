@@ -185,7 +185,7 @@ def _compute_valid_locations(disparity_image_paths, sample_ids, img_height,
                 valid_locations[valid_count, :] = location_info
                 valid_count += 1
     valid_locations = valid_locations[0:valid_count, :]
-    logger.info("Total Number of valid locations: ", valid_count)
+    logger.info("Total Number of valid locations: {}".format(valid_count))
     # NOTE: Shuffle patch locations info here, this will be used to directly
     # present samples in a min-batch while training.
     np.random.shuffle(valid_locations)
@@ -607,17 +607,18 @@ def main():
         logger.warning("GPU not available!")
     global device
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    logger.info('Using device', device)
+    logger.info('Using device {}'.format(device))
     torch.backends.cudnn.benchmark = True
     # Declare Siamese Network
     if settings.patch_size == 13:
         net = SiameseNetwork13().cuda()
         model = SiameseNetwork13().to(device)
-        torchsummary.summary(model, input_size=[(3, 13, 13), (3, 13, 213)])
+        model_description, _ = torchsummary.summary_string(model, input_size=[(3, 13, 13), (3, 13, 213)])
     else:
         net = SiameseNetwork().cuda()
         model = SiameseNetwork().to(device)
-        torchsummary.summary(model, input_size=[(3, 37, 37), (3, 37, 237)])
+        model_description, _ = torchsummary.summary_string(model, input_size=[(3, 37, 37), (3, 37, 237)])
+    logger.info('\n' + model_description)
     sys.stdout.flush()  # flush torchsummary.summary output
 
     # ----- TRAINING -----
