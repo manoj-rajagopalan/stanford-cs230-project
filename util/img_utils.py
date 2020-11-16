@@ -1,3 +1,6 @@
+import glob
+import os.path
+
 import matplotlib
 matplotlib.use('agg')
 
@@ -36,9 +39,9 @@ def load_image_paths(data_path, left_img_folder, right_img_folder, disparity_fol
         (tuple): tuple of lists with paths to images.
 
     """
-    left_image_paths = sorted(glob.glob(join(data_path, left_img_folder, '*10.png')))
-    right_image_paths = sorted(glob.glob(join(data_path, right_img_folder, '*10.png')))
-    disparity_image_paths = sorted(glob.glob(join(data_path, disparity_folder, '*10.png')))
+    left_image_paths = sorted(glob.glob(os.path.join(data_path, left_img_folder, '*10.png')))
+    right_image_paths = sorted(glob.glob(os.path.join(data_path, right_img_folder, '*10.png')))
+    disparity_image_paths = sorted(glob.glob(os.path.join(data_path, disparity_folder, '*10.png')))
 
     assert len(left_image_paths) == len(right_image_paths)
     assert len(left_image_paths) == len(disparity_image_paths)
@@ -146,7 +149,7 @@ def save_images(images, cols, titles, directory, filename):
         a.axis('off')
         a.set_title(title, fontsize=40)
     fig.set_size_inches(np.array(fig.get_size_inches()) * n_images)
-    plt.savefig(join(directory, filename), bbox_inches='tight')
+    plt.savefig(os.path.join(directory, filename), bbox_inches='tight')
     plt.close(fig)
 
 # /save_images()
