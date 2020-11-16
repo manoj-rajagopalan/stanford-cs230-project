@@ -44,6 +44,12 @@ import cv2
 from torch.utils.tensorboard import SummaryWriter
 import torchsummary
 
+# Project code imports
+from util.img_utils import *
+from net.siamese_network import SiameseNetwork
+from net.siamese_network_13 import SiameseNetwork13
+from loss.inner_product_loss import InnerProductLoss
+
 ##########################################################################
 # Load Settings
 ##########################################################################
@@ -141,22 +147,6 @@ with open(settings_file, 'w') as the_file:
 LOG_FORMAT = '%(asctime)-15s %(levelname)-5s %(name)-15s - %(message)s'
 
 
-def trim_image(img, img_height, img_width):
-    """Trim image to remove pixels on the right and bottom.
-
-    Args:
-        img (numpy.ndarray): input image.
-        img_height (int): desired image height.
-        img_width (int): desired image width.
-
-    Returns:
-        (numpy.ndarray): trimmed image.
-
-    """
-    # PIL im.crop((left, upper, right, lower))
-    return img[0:img_height, 0:img_width]
-
-
 def setup_logging(log_path=None, log_level='DEBUG', logger=None, fmt=LOG_FORMAT):
     """Prepare logging for the provided logger.
 
@@ -187,30 +177,6 @@ def setup_logging(log_path=None, log_level='DEBUG', logger=None, fmt=LOG_FORMAT)
 ##########################################################################
 # Input Pre Procesing
 ##########################################################################
-
-def load_image_paths(data_path, left_img_folder, right_img_folder,
-                     disparity_folder):
-    """Load paths to images.
-
-    Args:
-        data_path (str): path to main dataset folder.
-        left_img_folder (str): path to image folder with left camera images.
-        right_img_folder (str): path to image folder with right camera images.
-        disparity_folder (str): path to image folder with disparity images.
-
-    Returns:
-        (tuple): tuple of lists with paths to images.
-
-    """
-    left_image_paths = sorted(glob.glob(join(data_path, left_img_folder, '*10.png')))
-    right_image_paths = sorted(glob.glob(join(data_path, right_img_folder, '*10.png')))
-    disparity_image_paths = sorted(glob.glob(join(data_path, disparity_folder, '*10.png')))
-
-    assert len(left_image_paths) == len(right_image_paths)
-    assert len(left_image_paths) == len(disparity_image_paths)
-
-    return left_image_paths, right_image_paths, disparity_image_paths
-
 
 def _is_valid_location(sample_locations, img_width, img_height,
                        half_patch_size, half_range):
@@ -367,77 +333,6 @@ def find_and_store_patch_locations(settings):
 # Dataset Class
 ##########################################################################
 
-
-def _load_image(image_path, img_height, img_width):
-    """Load image and convert to Tensor.
-
-    Args:
-        image_path (str): path to image.
-        img_height (int): desired height of output image (excess trimmed).
-        img_width (int): desired width of output image (excess trimmed).
-
-    Returns:
-        img (Tensor): image array as tensor.
-
-    """
-
-    img = Image.open(image_path)
-    tran = transforms.ToTensor()
-    img = tran(img)
-    img = img[:, :img_height, :img_width]
-
-    return img
-
-
-def _load_disparity(image_path, img_height, img_width):
-    """Load disparity image as numpy array.
-
-    Args:
-        image_path (str): path to disparity image.
-        img_height (int): desired height of output image (excess trimmed).
-        img_width (int): desired width of output image (excess trimmed).
-
-    Returns:
-        disp_img (numpy.ndarray): disparity image array as tensor.
-
-    """
-    disp_img = np.array(Image.open(image_path)).astype('float64')
-    disp_img = trim_image(disp_img, img_height, img_width)
-    disp_img /= 256
-
-    return disp_img
-
-
-def _load_images(left_image_paths, right_image_paths, disparity_paths, img_height, img_width):
-    """Load left, right images as tensors and disparity as a numpy array.
-
-    Args:
-        left_image_paths (list): list of paths to left images.
-        right_image_paths (list): list of paths to right images.
-        disparity_paths (list): list of paths to disparity files.
-        img_height (int): desired height of output image (excess trimmed).
-        img_width (int): desired width of output image (excess trimmed).
-
-    Returns:
-        tuple of (left (Tensor), right (Tensor), disparity images (numpy array))
-
-    """
-    left_images = []
-    right_images = []
-    disparity_images = []
-    num_images = len(left_image_paths)
-    print("Num Images: ", num_images)
-    for idx in range(num_images):
-        left_images.append(_load_image(left_image_paths[idx], img_height, img_width))
-        right_images.append(_load_image(right_image_paths[idx], img_height, img_width))
-
-        if disparity_paths:
-            disparity_images.append(_load_disparity(disparity_paths[idx], img_height, img_width))
-
-    print('_load_images: Loaded', len(left_images), 'images')
-    return (left_images, right_images, np.array(disparity_images))
-
-
 def _get_labels(disparity_range, half_range):
     """Creates the default disparity range for ground truth.  This does not shift
        the center of the target based upon the disparity value, but creates one
@@ -457,247 +352,6 @@ def _get_labels(disparity_range, half_range):
     gt[half_range - 2: half_range + 3] = np.array([0.05, 0.2, 0.5, 0.2, 0.05])
 
     return gt
-
-
-class SiameseDataset(Dataset):
-    """Dataset class to provide training and validation data.
-
-    When initialized, loads patch locations info from file, loads all left and
-    right camera images into memory for enabling fast loading.
-
-    Attributes:
-        left_images (Tensor): tensor of all left camera images.
-        right_images (Tensor): tensor of all right camera images.
-
-    """
-
-    def __init__(self, settings, patch_locations, transform=None):
-        """Constructor.
-
-        Args:
-            settings (argparse.Namespace): settings for the project derived from
-            main script.
-            patch_locations (dict): dict with arrays containing patch locations
-            info.
-            transform (function): not implimented
-
-        """
-        self._settings = settings
-        left_image_paths, right_image_paths, disparity_paths = \
-            load_image_paths(settings.data_path,
-                             settings.left_img_folder,
-                             settings.right_img_folder,
-                             settings.disparity_folder)
-
-        self.left_images, self.right_images, self.disparity_images = \
-            _load_images(left_image_paths,
-                         right_image_paths,
-                         disparity_paths,
-                         settings.img_height,
-                         settings.img_width)
-
-        self.sample_ids = patch_locations['ids']
-        self.patch_locations = patch_locations
-        self.length = len(self.patch_locations['valid_locations'])
-        self.transform = transform
-
-    def __len__(self):
-        'Returns the total number of samples'
-        return self.length
-
-    def _pytorch_parse_function(self, sample_info):
-        """Creates the default disparity range for ground truth.  This does not
-           shift the center of the target based upon the disparity value, but
-           creates one array for all disparities.
-
-        Args:
-          sample_info (list): the encoded sample patch location information of
-                              index, left column, row, right column
-
-        Returns:
-          left_patch (Tensor): sub-image left patch
-          right_patch (Tensor): sub-image right patch
-          labels (numpy array): the array used as "ground truth"
-        """
-
-        idx = sample_info[0]
-        left_center_x = sample_info[1]
-        left_center_y = sample_info[2]
-        right_center_x = sample_info[3]
-
-        left_image = self.left_images[idx]
-        right_image = self.right_images[idx]
-
-        left_patch = left_image[:,
-                     left_center_y - self._settings.half_patch_size:
-                     left_center_y + self._settings.half_patch_size + 1,
-                     left_center_x - self._settings.half_patch_size:
-                     left_center_x + self._settings.half_patch_size + 1]
-        right_patch = right_image[:,
-                      left_center_y - self._settings.half_patch_size:
-                      left_center_y + self._settings.half_patch_size + 1,
-                      right_center_x - self._settings.half_patch_size - self._settings.half_range:
-                      right_center_x + self._settings.half_patch_size + self._settings.half_range + 1]
-
-        labels = _get_labels(self._settings.disparity_range, self._settings.half_range)
-
-        return left_patch, right_patch, labels
-
-    def __getitem__(self, index):
-        """Generates one sample of data to itterate training on.  __getitem__
-           can be called by using the index of the assigend variable.  I.e.
-           dataset = SiameseDataset(self, settings, patch_locations)
-           dataset[0] will call __getitem__ with an index of 0
-        Args:
-          index (int): the index into the array of patch sets.
-
-        Returns:
-          left_patch (Tensor): sub-image left patch
-          right_patch (Tensor): sub-image right patch
-          labels (Tensor): the array used as "ground truth"
-        """
-
-        # Loading the image
-        if index > self.length - 1:
-            print("Index is too large : ", index, "Dataset length : ", self.length)
-        sample_info = np.zeros((4,), dtype=int)
-        # Convert location information from floats into ints
-        sample_info[0] = int(self.patch_locations['valid_locations'][index][0])
-        sample_info[1] = int(self.patch_locations['valid_locations'][index][1])
-        sample_info[2] = int(self.patch_locations['valid_locations'][index][2])
-        sample_info[3] = int(self.patch_locations['valid_locations'][index][3])
-        left_patch, right_patch, labels = self._pytorch_parse_function(sample_info)
-
-        # Apply image transformations (not currently used)
-        if self.transform is not None:
-            left_patch = self.transform(left_patch)
-            right_patch = self.transform(right_patch)
-        return left_patch, right_patch, torch.from_numpy(np.array(labels, dtype=np.float32))
-
-
-##########################################################################
-# Models
-##########################################################################
-
-class SiameseNetwork(nn.Module):
-    def __init__(self):
-        super(SiameseNetwork, self).__init__()
-
-        # Setting up the Sequential of CNN Layers for 37x37 input patches
-        self.cnn1 = nn.Sequential(
-
-            nn.Conv2d(3, 32, kernel_size=5),  # 1
-            nn.BatchNorm2d(32),
-            nn.ReLU(inplace=True),
-
-            nn.Conv2d(32, 32, kernel_size=5),  # 2
-            nn.BatchNorm2d(32),
-            nn.ReLU(inplace=True),
-
-            nn.Conv2d(32, 64, kernel_size=5),  # 3
-            nn.BatchNorm2d(64),
-            nn.ReLU(inplace=True),
-
-            nn.Conv2d(64, 64, kernel_size=5),  # 4
-            nn.BatchNorm2d(64),
-            nn.ReLU(inplace=True),
-
-            nn.Conv2d(64, 64, kernel_size=5),  # 5
-            nn.BatchNorm2d(64),
-            nn.ReLU(inplace=True),
-
-            nn.Conv2d(64, 64, kernel_size=5),  # 6
-            nn.BatchNorm2d(64),
-            nn.ReLU(inplace=True),
-
-            nn.Conv2d(64, 64, kernel_size=5),  # 7
-            nn.BatchNorm2d(64),
-            nn.ReLU(inplace=True),
-
-            nn.Conv2d(64, 64, kernel_size=5),  # 8
-            nn.BatchNorm2d(64),
-            nn.ReLU(inplace=True),
-
-            nn.Conv2d(64, 64, kernel_size=5),  # 9 - no ReLu on Output
-            nn.BatchNorm2d(64),
-
-        )
-
-    def forward(self, left_patch, right_patch):
-        left_feature = self.cnn1(left_patch)
-        right_feature = self.cnn1(right_patch)
-        return left_feature, right_feature
-
-
-class SiameseNetwork13(nn.Module):
-    def __init__(self):
-        super(SiameseNetwork13, self).__init__()
-
-        # Setting up the Sequential of CNN Layers for 13x13 input patches
-        self.cnn1 = nn.Sequential(
-
-            nn.Conv2d(3, 32, kernel_size=5),  # 1
-            nn.BatchNorm2d(32),
-            nn.ReLU(inplace=True),
-
-            nn.Conv2d(32, 32, kernel_size=5),  # 2
-            nn.BatchNorm2d(32),
-            nn.ReLU(inplace=True),
-
-            nn.Conv2d(32, 64, kernel_size=5),  # 9 - no ReLu on Output
-            nn.BatchNorm2d(64),
-
-        )
-
-    def forward(self, left_patch, right_patch):
-        left_feature = self.cnn1(left_patch)
-        right_feature = self.cnn1(right_patch)
-        return left_feature, right_feature
-
-
-##########################################################################
-# Loss Function
-##########################################################################
-
-class InnerProductLoss(torch.nn.Module):
-    """
-       To aid in training the inner product loss calculates the softmax with
-       logits on a lables which have a probability distribution around the
-       ground truth.  As a result the labels are not 0/1 integers, but floats.
-    """
-
-    def __init__(self):
-        super(InnerProductLoss, self).__init__()
-
-    def forward(self, left_feature, right_feature, labels):
-        """Calculate the loss describe above.
-
-        Args:
-          left_feature (Tensor): output of from the left patch passing through
-                                 the Siamese network of dimensions (1, 1, 1, 64)
-          right_feature (Tensor): output of from the right patch passing through
-                                  the Siamese network of dimensions
-                                  (1, 1, disparity_range, 64)
-          lables (Tensor): the "ground truth" of the expected disparity for the
-                           patches of dimensions (1, disparity_range)
-
-
-        Returns:
-          left_patch (Tensor): sub-image left patch
-          right_patch (Tensor): sub-image right patch
-          labels (numpy array): the array used as "ground truth"
-        """
-        left_feature = torch.squeeze(left_feature)
-        # perform inner product of left and right features
-        inner_product = torch.einsum('il,iljk->ik', left_feature, right_feature)
-        # peform the softmax with logits in two steps.  torch does not support
-        # softmax with logits on float labels, so the calculation is broken
-        # into calculating yhat and then the loss
-        yhat = F.log_softmax(inner_product, dim=-1)
-        loss = -1.0 * torch.einsum('ij,ij->i', yhat, labels).sum() / yhat.size(0)
-
-        return loss
-
 
 ##########################################################################
 # Adaptive Learning Rate
@@ -755,50 +409,6 @@ def train(num_batches, train_dataloader, optimizer, net, criterion, val_dataset_
 ##########################################################################
 # Inference Functions
 ##########################################################################
-
-def save_images(images, cols, titles, directory, filename):
-    """Save multiple images arranged as a table.
-
-    Args:
-        images (list): list of images to display as numpy arrays.
-        cols (int): number of columns.
-        titles (list): list of title strings for each image.
-        iteration (int): iteration counter or plot interval.
-
-    """
-    assert ((titles is None) or (len(images) == len(titles)))
-    n_images = len(images)
-    if titles is None: titles = ['Image (%d)' % i for i in range(1, n_images + 1)]
-    fig = plt.figure(figsize=(20, 10))
-    for n, (image, title) in enumerate(zip(images, titles)):
-        a = fig.add_subplot(cols, np.ceil(n_images / float(cols)), n + 1)
-        image = np.squeeze(image)
-        if image.ndim == 2:
-            plt.gray()
-        plt.imshow(image)
-
-        a.axis('off')
-        a.set_title(title, fontsize=40)
-    fig.set_size_inches(np.array(fig.get_size_inches()) * n_images)
-    plt.savefig(join(directory, filename), bbox_inches='tight')
-    plt.close(fig)
-
-
-def prediction_to_image(disp_prediction):
-    """
-    Args:
-        disp_prediction (Tensor): disparity prediction.
-
-    Returns:
-        image (float): PNG formatted image
-
-    """
-    disp_img = np.array(disp_prediction)
-    disp_img[disp_img < 0] = 0
-    cmap = plt.cm.jet
-    norm = plt.Normalize(vmin=disp_img.min(), vmax=disp_img.max())
-    return cmap(norm(disp_img))
-
 
 def calc_error(disparity_prediction, disparity_ground_truth, idx):
     """Meaures the disparity prediction pixel by pixel against the ground truth
@@ -1003,6 +613,8 @@ def main():
         torchsummary.summary(model, input_size=[(3, 37, 37), (3, 37, 237)])
     sys.stdout.flush()  # flush torchsummary.summary output
 
+    # ----- TRAINING -----
+
     if settings.phase == 'training' or settings.phase == 'both':
         training_dataset = SiameseDataset(settings, patch_locations['train'])
         # print("Batch Size : ", settings.batch_size)
@@ -1037,6 +649,9 @@ def main():
         model = train(num_batches, train_dataloader, optimizer, net, criterion, val_dataset_iterator)
         torch.save(model.state_dict(), settings.model_path)
         print("Model Saved Successfully")
+    # /if 
+
+    # ----- TESTING -----
 
     if settings.phase == 'testing' or settings.phase == 'both':
         print("Start Testing")
@@ -1086,6 +701,8 @@ def main():
             save_images([left_image_in.permute(1, 2, 0), disp_image], 1, ['left image', 'disparity'], settings.image_dir,
                         'disparity_{}.png'.format(idx))
             cv2.imwrite(join(settings.image_dir, (("00000" + str(idx))[-6:] + "_10.png")), np.array(disp_prediction.cpu()))
+        # /for idx
+
         if settings.test_all:
             for idx in train_image_indices:
                 left_image_in = _load_image(left_image_paths[idx], settings.img_height, settings.img_width)
@@ -1107,6 +724,9 @@ def main():
                             'disparity_{}.png'.format(idx))
                 cv2.imwrite(join(settings.image_dir, (("00000" + str(idx))[-6:] + "_10.png")),
                             np.array(disp_prediction.cpu()))
+            # /for idx
+        # /if settings.test_all
+
         average_error = 0.0
         for idx in error_dict:
             average_error += error_dict[idx] / len(error_dict)
