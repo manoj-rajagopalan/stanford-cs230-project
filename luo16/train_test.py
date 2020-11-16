@@ -3,7 +3,6 @@
 
 import os
 import sys
-import glob
 import pickle
 
 from PIL import Image
@@ -46,103 +45,14 @@ import torchsummary
 
 # Project code imports
 from util.img_utils import *
+from dataset.siamese_dataset import SiameseDataset
 from net.siamese_network import SiameseNetwork
 from net.siamese_network_13 import SiameseNetwork13
 from loss.inner_product_loss import InnerProductLoss
 
 ##########################################################################
-# Load Settings
-##########################################################################
-
-if False: # 'google.colab' in str(get_ipython()):
-    print("Running in colab mode")
-
-
-    class Args:
-        resume = False  # help='resume from checkpoint')
-        data_path = '/content/kitti2015_full_min/'  # join('data', settings.dataset, settings.phase))
-        exp_name = '37x37_ref'
-        result_dir = 'results'  # result directory
-        log_level = 'INFO'  # choices = ['DEBUG', 'INFO'], help='log-level to use')
-        batch_size = 32  # type=int, help='batch-size to use')
-        dataset = 'kitti_2015'  # , choices=['kitti_2012', 'kitti_2015'], help='dataset')
-        seed = 3  # , type=int, help='random seed')
-        patch_size = 37  # , type=int, help='patch size from left image')
-        disparity_range = 201  # , type=int, help='disparity range')
-        learning_rate = 0.01  # , type=float, help='initial learning rate')
-        reduction_factor = 25  # , type=int, help='ratio of the end learning rate to the starting learning rate')
-        find_patch_locations = False  # , help='find and store patch locations')
-        num_iterations = 1  # , type=int, help='number of training iterations')
-        phase = 'both'  # , choices=['training', 'testing', 'both'], help='training or testing, if testing perform inference on test set.')
-        post_process = False  # , help='toggle use of post-processing.')
-        eval = False  # , help='compute error on validation set.')
-        test_all = False  # , help='run testing on all image pairs')
-        max_batches = 100  # regardless of dataset size limit the number of batches
-        shuffle_images = False  # Shuffle the selection of images fed into the patch generator)
-
-
-    settings = Args()
-else:
-    print("Running in script mode")
-    parser = argparse.ArgumentParser(
-        description='Re-implementation of Efficient Deep Learning for Stereo Matching')
-    parser.add_argument('--resume', '-r', default=False, help='resume from checkpoint - not supported')
-    parser.add_argument('--data-path', default='kitti_2015', type=str, help='root location of kitti_dataset')
-    parser.add_argument('--exp-name', default='bs_128_lr_0.2g', type=str, help='name of experiment')
-    parser.add_argument('--result-dir', default='results', type=str, help='results directory')
-    parser.add_argument('--experiments-dir', default='experiments', type=str, help='experiments directory')
-    parser.add_argument('--log-level', default='INFO', choices=['DEBUG', 'INFO'], help='log-level to use')
-    parser.add_argument('--batch-size', default=128, type=int, help='batch-size to use')
-    parser.add_argument('--dataset', default='kitti_2015', choices=['kitti_2012', 'kitti_2015'], help='dataset')
-    parser.add_argument('--seed', default=3, type=int, help='random seed')
-    parser.add_argument('--patch-size', default=37, type=int, help='patch size from left image: 9 or 37')
-    parser.add_argument('--disparity-range', default=201, type=int, help='disparity range')
-    parser.add_argument('--learning-rate', default=0.02, type=float, help='initial learning rate')
-    parser.add_argument('--reduction-factor', default=50, type=int,
-                        help='ratio of the end learning rate to the starting learning rate')
-    parser.add_argument('--find-patch-locations', default=False, help='find and store patch locations')
-    parser.add_argument('--num_iterations', default=1, type=int, help='number of training iterations')
-    parser.add_argument('--phase', default='training', choices=['training', 'testing', 'both'],
-                        help='training or testing, if testing perform inference on test set.')
-    parser.add_argument('--post-process', default=False, help='toggle use of post-processing.')
-    parser.add_argument('--eval', default=False, help='compute error on validation set.')
-    parser.add_argument('--test-all', default=False, help='run testing on all image pairs')
-    parser.add_argument('--max-batches', default=100000, type=int,
-                        help='regardless of dataset size limit the number of batches')
-    parser.add_argument('--shuffle-images', default=False,
-                        help='Shuffle the selection of images fed into the patch generator')
-
-    settings = parser.parse_args()
-
-# Settings, hyper-parameters.
-settings.data_path = join(settings.data_path, 'training')
-setattr(settings, 'exp_path', join(settings.result_dir, settings.exp_name))
-setattr(settings, 'img_height', 370)
-setattr(settings, 'img_width', 1224)
-setattr(settings, 'half_patch_size', (settings.patch_size // 2))
-setattr(settings, 'half_range', settings.disparity_range // 2)
-setattr(settings, 'num_train', 160)
-setattr(settings, 'model_name', join('model_', str(settings.patch_size)))
-
-setattr(settings, 'left_img_folder', 'image_2')
-setattr(settings, 'right_img_folder', 'image_3')
-setattr(settings, 'disparity_folder', 'disp_noc_0')
-setattr(settings, 'num_val', 40)
-setattr(settings, 'num_input_channels', 3)
-setattr(settings, 'image_dir', join(settings.exp_path, 'images'))
-setattr(settings, 'patch_locations_path', join(settings.exp_path, 'patch_locations.pkl'))
-setattr(settings, 'model_path', join(settings.exp_path, 'model.pt'))
-
-os.makedirs(settings.exp_path, exist_ok=True)
-os.makedirs(settings.image_dir, exist_ok=True)
-settings_file = join(settings.exp_path, 'settings.log')
-with open(settings_file, 'w') as the_file:
-    the_file.write(str(settings))
-
-##########################################################################
 # Utilities
 ##########################################################################
-
 
 LOG_FORMAT = '%(asctime)-15s %(levelname)-5s %(name)-15s - %(message)s'
 
@@ -157,6 +67,8 @@ def setup_logging(log_path=None, log_level='DEBUG', logger=None, fmt=LOG_FORMAT)
             if it's None, root logger will be used
         fmt (str, optional): format for the logging message
 
+    Returns:
+        logger: logging object
     """
     logger = logger if logger else logging.getLogger()
     logger.setLevel(log_level)
@@ -173,6 +85,8 @@ def setup_logging(log_path=None, log_level='DEBUG', logger=None, fmt=LOG_FORMAT)
         logger.addHandler(file_handler)
         logger.info('Log file is %s', log_path)
 
+    return logger
+# /setup_logging()
 
 ##########################################################################
 # Input Pre Procesing
@@ -233,7 +147,7 @@ def _compute_valid_locations(disparity_image_paths, sample_ids, img_height,
     num_samples = len(sample_ids)
     num_valid_locations = np.zeros(num_samples)
 
-    # print("Number of images : ", len(sample_ids))
+    # logger.info("Number of images : ", len(sample_ids))
     for i, idx in enumerate(sample_ids):
         disp_img = np.array(Image.open(disparity_image_paths[idx])).astype('float64')
         # NOTE: We want images of same size for efficient loading.
@@ -241,7 +155,7 @@ def _compute_valid_locations(disparity_image_paths, sample_ids, img_height,
         disp_img /= 256
         max_disp_img = np.max(disp_img)
         num_valid_locations[i] = (disp_img != 0).sum()
-        # print(disparity_image_paths[idx], " Max disp: ", max_disp_img, "Num valid locations : ",  num_valid_locations[i])
+        # logger.info(disparity_image_paths[idx], " Max disp: ", max_disp_img, "Num valid locations : ",  num_valid_locations[i])
 
     num_valid_locations = int(num_valid_locations.sum())
     valid_locations = np.zeros((num_valid_locations, 4))
@@ -271,7 +185,7 @@ def _compute_valid_locations(disparity_image_paths, sample_ids, img_height,
                 valid_locations[valid_count, :] = location_info
                 valid_count += 1
     valid_locations = valid_locations[0:valid_count, :]
-    print("Total Number of valid locations: ", valid_count)
+    logger.info("Total Number of valid locations: ", valid_count)
     # NOTE: Shuffle patch locations info here, this will be used to directly
     # present samples in a min-batch while training.
     np.random.shuffle(valid_locations)
@@ -376,13 +290,13 @@ def train(num_batches, train_dataloader, optimizer, net, criterion, val_dataset_
     loss_history = []
     lr = settings.learning_rate
 
-    print("Number of iterations : ", settings.num_iterations)
+    logger.info("Number of iterations : ", settings.num_iterations)
     for epoch in range(settings.num_iterations):
-        # print ("Epoch : ", epoch)
+        # logger.info("Epoch : ", epoch)
         for i, data in enumerate(train_dataloader, 0):
-            # print("Batch : ", i)
+            # logger.info("Batch : ", i)
             left_patch, right_patch, labels = data
-            # print("Data Size : ", left_patch.size())
+            # logger.info("Data Size : ", left_patch.size())
             left_patch, right_patch, labels = left_patch.cuda(), right_patch.cuda(), labels.cuda()
             optimizer.zero_grad()
             left_feature, right_feature = net(left_patch, right_patch)
@@ -396,7 +310,7 @@ def train(num_batches, train_dataloader, optimizer, net, criterion, val_dataset_
                 optimizer.zero_grad()
                 left_feature, right_feature = net(left_patch, right_patch)
                 val_loss_inner_product = criterion(left_feature, right_feature, labels)
-                print("{}, Epoch: {}, Batch: {}, Learning Rate: {}, Training loss: {}, Validation loss: {}".format(
+                logger.info("{}, Epoch: {}, Batch: {}, Learning Rate: {}, Training loss: {}, Validation loss: {}".format(
                     datetime.datetime.now(tz=pytz.utc), epoch, i, lr, loss_inner_product.item(),
                     val_loss_inner_product.item()))
                 loss_history.append(loss_inner_product.item())
@@ -434,7 +348,7 @@ def calc_error(disparity_prediction, disparity_ground_truth, idx):
     num_error_pixels = (np.abs(masked_prediction_valid - disparity_ground_truth) > 3).sum()
     error += num_error_pixels / num_valid_gt_pixels
 
-    print('Error: {:04f}, for image index {}'.format(error, idx))
+    logger.error('{:04f}, for image index {}'.format(error, idx))
 
     return error
 
@@ -465,7 +379,7 @@ def apply_cost_aggregation(cost_volume):
     # desired, but must be done one at a time fourDimensionPad = (0, 0, 2, 2, 2, 2, 0, 0)
     # Cost volume arrives as 1 x H x W x C
     twoDimensionPad = (2, 2, 2, 2)
-    # print("Cost Volume Shape : ", cost_volume.size())
+    # logger.info("Cost Volume Shape : ", cost_volume.size())
     cost_volume.permute(3, 0, 1, 2)  # barrel shift right
     cost_volume = F.pad(cost_volume, twoDimensionPad, "reflect", 0)
     cost_volume.permute(1, 2, 3, 0)  # back to original order
@@ -491,13 +405,13 @@ def calc_cost_volume(left_features, right_features, mask=None):
     """
     inner_product, win_indices = [], []
     img_height, img_width = right_features.shape[2], right_features.shape[3]
-    # print("right feature shape : ", right_feature.size())
+    # logger.info("right feature shape : ", right_feature.size())
     row_indices = torch.arange(0, img_width, dtype=torch.int64)
 
     for i in range(img_width):
-        # print("left feature shape before squeeze : ", left_feature.size())
+        # logger.info("left feature shape before squeeze : ", left_feature.size())
         left_column_features = torch.squeeze(left_features[:, :, :, i])
-        # print("left feature shape after squeeze  : ", left_column_features.size())
+        # logger.info("left feature shape after squeeze  : ", left_column_features.size())
         start_win = max(0, i - settings.half_range)
         end_win = max(settings.disparity_range, settings.half_range + i + 1)
         start_win = start_win - max(0, end_win - img_width)  # was img_width.value
@@ -505,21 +419,21 @@ def calc_cost_volume(left_features, right_features, mask=None):
 
         right_win_features = torch.squeeze(right_features[:, :, :, start_win:end_win])
         win_indices_column = torch.unsqueeze(row_indices[start_win:end_win], 0)
-        # print("left feature shape      : ", left_column_features.size())
-        # print("right win feature shape : ", right_win_features.size())
+        # logger.info("left feature shape      : ", left_column_features.size())
+        # logger.info("right win feature shape : ", right_win_features.size())
         inner_product_column = torch.einsum('ij,ijk->jk', left_column_features,
                                             right_win_features)
         inner_product_column = torch.unsqueeze(inner_product_column, 1)
         inner_product.append(inner_product_column)
         win_indices.append(win_indices_column)
-    # print("inner_product len   : ", len(inner_product))
-    # print("inner_product width : ", len(inner_product[0]))
-    # print("win_indices len   : ", len(win_indices))
-    # print("win_indices width : ", len(win_indices[0]))
+    # logger.info("inner_product len   : ", len(inner_product))
+    # logger.info("inner_product width : ", len(inner_product[0]))
+    # logger.info("win_indices len   : ", len(win_indices))
+    # logger.info("win_indices width : ", len(win_indices[0]))
     inner_product = torch.unsqueeze(torch.cat(inner_product, 1), 0)
-    # print("inner_product after unsqueeze  : ", inner_product.size())
+    # logger.info("inner_product after unsqueeze  : ", inner_product.size())
     win_indices = torch.cat(win_indices, 0).to(device)
-    # print("win_indices shape : ", win_indices.size())
+    # logger.info("win_indices shape : ", win_indices.size())
     return inner_product, win_indices
 
 
@@ -535,12 +449,12 @@ def inference(left_features, right_features, post_process):
 
     """
     cost_volume, win_indices = calc_cost_volume(left_features, right_features)
-    # print("Cost Volume Shape : ", cost_volume.size())
+    # logger.info("Cost Volume Shape : ", cost_volume.size())
     img_height, img_width = cost_volume.shape[1], cost_volume.shape[2]  # Now 1 x C X H x W, was 1 x H x W x C
     if post_process:
         cost_volume = apply_cost_aggregation(cost_volume)
     cost_volume = torch.squeeze(cost_volume)
-    # print("Cost Volume Shape (post squeeze): ", cost_volume.size())
+    # logger.info("Cost Volume Shape (post squeeze): ", cost_volume.size())
     row_indices, _ = torch.meshgrid(torch.arange(0, img_width, dtype=torch.int64),
                                     torch.arange(0, img_height, dtype=torch.int64))
 
@@ -554,53 +468,146 @@ def inference(left_features, right_features, post_process):
         column_disp_prediction = torch.unsqueeze(column_disp_prediction, 1)
         disp_prediction.append(column_disp_prediction)
 
-    # print("disp_prediction length (pre cat) : ", len(disp_prediction))
+    # logger.info("disp_prediction length (pre cat) : ", len(disp_prediction))
     disp_prediction = torch.cat(disp_prediction, 1)
-    # print("disp_prediction shape (post cat): ", disp_prediction.size())
-    # print("row indices                     : ", row_indices.size())
+    # logger.info("disp_prediction shape (post cat): ", disp_prediction.size())
+    # logger.info("row indices                     : ", row_indices.size())
     disp_prediction = row_indices.permute(1, 0).to(device) - disp_prediction
 
     return disp_prediction
 
+def setup_filesystem(settings):
+    os.makedirs(settings.exp_path, exist_ok=False)
+    os.makedirs(settings.image_dir, exist_ok=True)
+    settings_filename = os.path.join(settings.exp_path, 'settings.log')
+    with open(settings_filename, 'w') as settings_file:
+        settings_file.write(str(settings))
+
+# /setup_filesystem()
+
+def process_cmdline_args():
+    if False: # 'google.colab' in str(get_ipython()):
+        print("Running in colab mode")
+
+        class Args:
+            resume = False  # help='resume from checkpoint')
+            data_path = '/content/kitti2015_full_min/'  # join('data', settings.dataset, settings.phase))
+            exp_name = '37x37_ref'
+            result_dir = 'results'  # result directory
+            log_level = 'INFO'  # choices = ['DEBUG', 'INFO'], help='log-level to use')
+            batch_size = 32  # type=int, help='batch-size to use')
+            dataset = 'kitti_2015'  # , choices=['kitti_2012', 'kitti_2015'], help='dataset')
+            seed = 3  # , type=int, help='random seed')
+            patch_size = 37  # , type=int, help='patch size from left image')
+            disparity_range = 201  # , type=int, help='disparity range')
+            learning_rate = 0.01  # , type=float, help='initial learning rate')
+            reduction_factor = 25  # , type=int, help='ratio of the end learning rate to the starting learning rate')
+            find_patch_locations = False  # , help='find and store patch locations')
+            num_iterations = 1  # , type=int, help='number of training iterations')
+            phase = 'both'  # , choices=['training', 'testing', 'both'], help='training or testing, if testing perform inference on test set.')
+            post_process = False  # , help='toggle use of post-processing.')
+            eval = False  # , help='compute error on validation set.')
+            test_all = False  # , help='run testing on all image pairs')
+            max_batches = 100  # regardless of dataset size limit the number of batches
+            shuffle_images = False  # Shuffle the selection of images fed into the patch generator)
+
+        settings = Args()
+
+    else:
+        print("Running in script mode")
+        parser = argparse.ArgumentParser(
+            description='Re-implementation of Efficient Deep Learning for Stereo Matching')
+        parser.add_argument('--resume', '-r', default=False, help='resume from checkpoint - not supported')
+        parser.add_argument('--data-path', default='kitti_2015', type=str, help='root location of kitti_dataset')
+        parser.add_argument('--exp-name', default='bs_128_lr_0.2g', type=str, help='name of experiment')
+        parser.add_argument('--result-dir', default='/cs230-datasets/proj/results', type=str, help='results directory')
+        parser.add_argument('--experiments-dir', default='experiments', type=str, help='experiments directory')
+        parser.add_argument('--log-level', default='INFO', choices=['DEBUG', 'INFO'], help='log-level to use')
+        parser.add_argument('--batch-size', default=128, type=int, help='batch-size to use')
+        parser.add_argument('--dataset', default='kitti_2015', choices=['kitti_2012', 'kitti_2015'], help='dataset')
+        parser.add_argument('--seed', default=3, type=int, help='random seed')
+        parser.add_argument('--patch-size', default=37, type=int, help='patch size from left image: 9 or 37')
+        parser.add_argument('--disparity-range', default=201, type=int, help='disparity range')
+        parser.add_argument('--learning-rate', default=0.02, type=float, help='initial learning rate')
+        parser.add_argument('--reduction-factor', default=50, type=int,
+                            help='ratio of the end learning rate to the starting learning rate')
+        parser.add_argument('--find-patch-locations', default=False, help='find and store patch locations')
+        parser.add_argument('--num_iterations', default=1, type=int, help='number of training iterations')
+        parser.add_argument('--phase', default='training', choices=['training', 'testing', 'both'],
+                            help='training or testing, if testing perform inference on test set.')
+        parser.add_argument('--post-process', default=False, help='toggle use of post-processing.')
+        parser.add_argument('--eval', default=False, help='compute error on validation set.')
+        parser.add_argument('--test-all', default=False, help='run testing on all image pairs')
+        parser.add_argument('--max-batches', default=100000, type=int,
+                            help='regardless of dataset size limit the number of batches')
+        parser.add_argument('--shuffle-images', default=False,
+                            help='Shuffle the selection of images fed into the patch generator')
+
+        settings = parser.parse_args()
+    # /if-else
+
+    # Settings, hyper-parameters.
+    settings.data_path = os.path.join(settings.data_path, 'training')
+    setattr(settings, 'exp_path', os.path.join(settings.result_dir, settings.exp_name))
+    setattr(settings, 'img_height', 370)
+    setattr(settings, 'img_width', 1224)
+    setattr(settings, 'half_patch_size', (settings.patch_size // 2))
+    setattr(settings, 'half_range', settings.disparity_range // 2)
+    setattr(settings, 'num_train', 160)
+    setattr(settings, 'model_name', os.path.join('model_', str(settings.patch_size)))
+
+    setattr(settings, 'left_img_folder', 'image_2')
+    setattr(settings, 'right_img_folder', 'image_3')
+    setattr(settings, 'disparity_folder', 'disp_noc_0')
+    setattr(settings, 'num_val', 40)
+    setattr(settings, 'num_input_channels', 3)
+    setattr(settings, 'image_dir', os.path.join(settings.exp_path, 'images'))
+    setattr(settings, 'patch_locations_path', os.path.join(settings.exp_path, 'patch_locations.pkl'))
+    setattr(settings, 'model_path', os.path.join(settings.exp_path, 'model.pt'))
+
+    return settings
+# /process_cmdline_args()
 
 ##########################################################################
 # Main
 ##########################################################################
 
 device = 'unknown'
+logger = None
 
 def main():
 
+    settings = process_cmdline_args()    
+    setup_filesystem(settings)
+
     # Python logging.
     LOGGER = logging.getLogger(__name__)
-    exp_dir = join(settings.experiments_dir, '{}'.format(settings.exp_name))
-    log_file = join(exp_dir, 'log.log')
-    os.makedirs(exp_dir, exist_ok=True)
-    os.makedirs(join(exp_dir, 'qualitative_samples'), exist_ok=True)
-    setup_logging(log_path=log_file, log_level=settings.log_level, logger=LOGGER)
+    log_file = os.path.join(settings.exp_path, 'log.log')
+    global logger
+    logger = setup_logging(log_path=log_file, log_level=settings.log_level, logger=LOGGER)
 
     random.seed(settings.seed)
 
     patch_locations_loaded = 'patch_locations' in locals() or 'patch_locations' in globals()
     if not (patch_locations_loaded) or patch_locations == None:
         if not os.path.exists(settings.patch_locations_path):
-            print("New patch file being generated")
+            logger.info("New patch file being generated")
             find_and_store_patch_locations(settings)
         with open(settings.patch_locations_path, 'rb') as handle:
-            print("Loading existing patch file")
+            logger.info("Loading existing patch file")
             patch_locations = pickle.load(handle)
     else:
-        print("Patch file already loaded")
+        logger.info("Patch file already loaded")
     '''
     use_cuda = torch.cuda.is_available()
     device = torch.device("cuda:0" if use_cuda else "cpu")
     '''
     # Assign GPU
     if not torch.cuda.is_available():
-        print("GPU not available!")
+        logger.warning("GPU not available!")
     global device
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    print('Using device', device)
+    logger.info('Using device', device)
     torch.backends.cudnn.benchmark = True
     # Declare Siamese Network
     if settings.patch_size == 13:
@@ -617,18 +624,18 @@ def main():
 
     if settings.phase == 'training' or settings.phase == 'both':
         training_dataset = SiameseDataset(settings, patch_locations['train'])
-        # print("Batch Size : ", settings.batch_size)
-        print('training_dataset size = ', len(training_dataset))
-        print("Loading training dataset")
+        # logger.info("Batch Size : ", settings.batch_size)
+        logger.info('training_dataset size = ', len(training_dataset))
+        logger.info("Loading training dataset")
         train_dataloader = DataLoader(training_dataset,
                                       shuffle=True,
                                       num_workers=8,
                                       batch_size=settings.batch_size)
 
         val_dataset = SiameseDataset(settings, patch_locations['val'])
-        print('training_dataset size = ', len(training_dataset))
-        # print("Batch Size : ", settings.batch_size)
-        print("Loading validation dataset")
+        logger.info('training_dataset size = ', len(training_dataset))
+        # logger.info("Batch Size : ", settings.batch_size)
+        logger.info("Loading validation dataset")
         val_dataloader = DataLoader(val_dataset,
                                     shuffle=True,
                                     num_workers=2,
@@ -637,24 +644,24 @@ def main():
         val_dataset_iterator = iter(val_dataloader)
 
         num_batches = len(train_dataloader)
-        print("Number of ", settings.batch_size, "patch batches", num_batches)
+        logger.info("Number of ", settings.batch_size, "patch batches", num_batches)
 
         # Decalre Loss Function
         criterion = InnerProductLoss()
         # Declare Optimizer
         optimizer = torch.optim.Adam(net.parameters(), lr=settings.learning_rate)
 
-        print("Start Training")
+        logger.info("Start Training")
         # Train the model
         model = train(num_batches, train_dataloader, optimizer, net, criterion, val_dataset_iterator)
         torch.save(model.state_dict(), settings.model_path)
-        print("Model Saved Successfully")
+        logger.info("Model Saved Successfully")
     # /if 
 
     # ----- TESTING -----
 
     if settings.phase == 'testing' or settings.phase == 'both':
-        print("Start Testing")
+        logger.info("Start Testing")
         # Load the saved model
         model.load_state_dict(torch.load(settings.model_path))
         model.eval()  # required for batch normalization to function correctly
@@ -688,19 +695,19 @@ def main():
             right_image = F.pad(right_image, twoDimensionPad, "constant", 0)
             left_image = torch.unsqueeze(left_image, 0)
             right_image = torch.unsqueeze(right_image, 0)
-            # print("Left image size  : ", left_image.size())
-            # print("Right image size : ", right_image.size())
+            # logger.info("Left image size  : ", left_image.size())
+            # logger.info("Right image size : ", right_image.size())
             # left_feature, right_feature = model(left_image.to(device), right_image.to(device))
             left_feature, right_feature = model(left_image.to(device), right_image.to(device))
-            # print("Left feature size  : ", left_feature.size())
-            # print("Right feature size : ", right_feature.size())
-            # print("Left Feature on Cuda: ", left_feature.get_device())
+            # logger.info("Left feature size  : ", left_feature.size())
+            # logger.info("Right feature size : ", right_feature.size())
+            # logger.info("Left Feature on Cuda: ", left_feature.get_device())
             disp_prediction = inference(left_feature, right_feature, post_process=True)
             error_dict[idx] = calc_error(disp_prediction.cpu(), disparity_ground_truth, idx)
             disp_image = prediction_to_image(disp_prediction.cpu())
             save_images([left_image_in.permute(1, 2, 0), disp_image], 1, ['left image', 'disparity'], settings.image_dir,
                         'disparity_{}.png'.format(idx))
-            cv2.imwrite(join(settings.image_dir, (("00000" + str(idx))[-6:] + "_10.png")), np.array(disp_prediction.cpu()))
+            cv2.imwrite(os.path.join(settings.image_dir, (("00000" + str(idx))[-6:] + "_10.png")), np.array(disp_prediction.cpu()))
         # /for idx
 
         if settings.test_all:
@@ -722,7 +729,7 @@ def main():
                 save_images([left_image_in.permute(1, 2, 0), disp_image], 1, ['left image', 'disparity'],
                             settings.image_dir,
                             'disparity_{}.png'.format(idx))
-                cv2.imwrite(join(settings.image_dir, (("00000" + str(idx))[-6:] + "_10.png")),
+                cv2.imwrite(os.path.join(settings.image_dir, (("00000" + str(idx))[-6:] + "_10.png")),
                             np.array(disp_prediction.cpu()))
             # /for idx
         # /if settings.test_all
@@ -730,7 +737,7 @@ def main():
         average_error = 0.0
         for idx in error_dict:
             average_error += error_dict[idx] / len(error_dict)
-        print("Average Error : ", average_error)
+        logger.info("Average Error : ", average_error)
 
 
 if __name__ == "__main__":
