@@ -9,12 +9,11 @@ fi
 PYTHONPATH=$PWD:$PYTHONPATH \
 python3 luo16/train_test.py \
 	--data-path kitti_2015 \
-	--exp-name plumbing \
-	--batch-size 10 \
+	--exp-name manoj_aws_plumbing_test \
+	--batch-size 128 \
 	--learning-rate 0.01 \
 	--reduction-factor 1 \
-	--phase training \
-	--patch-size 13 \
-	--test-all TEST_ALL \
-	--max-batches 2
+	--phase both \
+	--patch-size 37 \
+	--test-all TEST_ALL
 
