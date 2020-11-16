@@ -51,7 +51,7 @@ import torchsummary
 # Load Settings
 ##########################################################################
 
-if False: 'google.colab' in str(get_ipython()):
+if False: # 'google.colab' in str(get_ipython()):
     print("Running in colab mode")
 
 
