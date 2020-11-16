@@ -1,7 +1,7 @@
 #!/bin/bash
 
 conda_env=$(conda info | grep 'active environment' | cut -d ':' -f 2 | xargs)
-if [[ "x${conda_env}" == "xNone" ]]; then
+if [[ "x${conda_env}x" != "xpytorch_latest_p37x" ]]; then
 	echo "Cannot run without conda env: conda activate pytorch_latest_p37"
 	exit 1
 fi
