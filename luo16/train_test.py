@@ -243,7 +243,7 @@ def find_and_store_patch_locations(settings):
     with open(settings.patch_locations_path, 'wb') as handle:
         pickle.dump(contents_to_save, handle, protocol=pickle.HIGHEST_PROTOCOL)
     # make read-only to prevent clobber
-    os.chmod(settings.patch_locations_path, stat.S_IREAD | ~stat.S_IWRITE | ~stat.S_IEXEC)
+    os.chmod(settings.patch_locations_path, stat.S_IREAD)
 
 
 ##########################################################################
@@ -733,7 +733,7 @@ def main():
         tensorboard_writer.add_scalar('average_disparity_error', average_error, global_step=idx)
 
     # Freeze results (for experiment) dir to prevent accidental clobber
-    os.chmod(settings.exp_path, stat.S_IREAD | ~stat.S_IWRITE | ~stat.S_IEXEC)
+    os.chmod(settings.exp_path, stat.S_IREAD)
 
 # /main()
 
