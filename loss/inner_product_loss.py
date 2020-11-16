@@ -1,4 +1,6 @@
+import torch
 from torch.nn import Module
+import torch.nn.functional as F
 
 class InnerProductLoss(Module):
     """

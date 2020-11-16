@@ -1,12 +1,15 @@
 import glob
 import os.path
 
+from PIL import Image
+
 import matplotlib
 matplotlib.use('agg')
 
 import matplotlib.pyplot as plt
 import numpy as np
 
+import torchvision.transforms as transforms
 
 def trim_image(img, img_height, img_width):
     """Trim image to remove pixels on the right and bottom.
@@ -50,7 +53,7 @@ def load_image_paths(data_path, left_img_folder, right_img_folder, disparity_fol
 
 # /load_image_paths()
 
-def _load_image(image_path, img_height, img_width):
+def load_image(image_path, img_height, img_width):
     """Load image and convert to Tensor.
 
     Args:
@@ -73,7 +76,7 @@ def _load_image(image_path, img_height, img_width):
 # /_load_image()
 
 
-def _load_disparity(image_path, img_height, img_width):
+def load_disparity(image_path, img_height, img_width):
     """Load disparity image as numpy array.
 
     Args:
@@ -94,7 +97,7 @@ def _load_disparity(image_path, img_height, img_width):
 # /_load_disparity()
 
 
-def _load_images(left_image_paths, right_image_paths, disparity_paths, img_height, img_width):
+def load_images(left_image_paths, right_image_paths, disparity_paths, img_height, img_width, logger=None):
     """Load left, right images as tensors and disparity as a numpy array.
 
     Args:
@@ -114,16 +117,16 @@ def _load_images(left_image_paths, right_image_paths, disparity_paths, img_heigh
     num_images = len(left_image_paths)
     print("Num Images: ", num_images)
     for idx in range(num_images):
-        left_images.append(_load_image(left_image_paths[idx], img_height, img_width))
-        right_images.append(_load_image(right_image_paths[idx], img_height, img_width))
+        left_images.append(load_image(left_image_paths[idx], img_height, img_width))
+        right_images.append(load_image(right_image_paths[idx], img_height, img_width))
 
         if disparity_paths:
-            disparity_images.append(_load_disparity(disparity_paths[idx], img_height, img_width))
+            disparity_images.append(load_disparity(disparity_paths[idx], img_height, img_width))
 
-    print('_load_images: Loaded', len(left_images), 'images')
+    print('load_images: Loaded', len(left_images), 'images')
     return (left_images, right_images, np.array(disparity_images))
 
-# /_load_images()
+# /load_images()
 
 def save_images(images, cols, titles, directory, filename):
     """Save multiple images arranged as a table.
@@ -170,3 +173,25 @@ def prediction_to_image(disp_prediction):
     return cmap(norm(disp_img))
 
 # /prediction_to_images()
+
+def get_labels(disparity_range, half_range):
+    """Creates the default disparity range for ground truth.  This does not shift
+       the center of the target based upon the disparity value, but creates one
+       array for all disparities.
+
+    Args:
+        disparity range (int): the maximum possible disparity value.
+        half_range (int): half of the maximum possible disparity value.
+
+    Returns:
+        gt (numpy array): the array used as "ground truth"
+
+    """
+    gt = np.zeros((disparity_range))
+
+    # NOTE: Smooth targets are [0.05, 0.2, 0.5, 0.2, 0.05], hard-coded.
+    gt[half_range - 2: half_range + 3] = np.array([0.05, 0.2, 0.5, 0.2, 0.05])
+
+    return gt
+
+# /get_labels()

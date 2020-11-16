@@ -3,6 +3,7 @@
 
 import os
 import sys
+import stat
 import pickle
 
 from PIL import Image
@@ -83,7 +84,7 @@ def setup_logging(log_path=None, log_level='DEBUG', logger=None, fmt=LOG_FORMAT)
         file_handler = logging.FileHandler(log_path)
         file_handler.setFormatter(fmt)
         logger.addHandler(file_handler)
-        logger.info('Log file is %s', log_path)
+        logger.info('Log file is ' + str(log_path))
 
     return logger
 # /setup_logging()
@@ -147,7 +148,7 @@ def _compute_valid_locations(disparity_image_paths, sample_ids, img_height,
     num_samples = len(sample_ids)
     num_valid_locations = np.zeros(num_samples)
 
-    # logger.info("Number of images : ", len(sample_ids))
+    # logger.info("Number of images : {}".format(len(sample_ids)))
     for i, idx in enumerate(sample_ids):
         disp_img = np.array(Image.open(disparity_image_paths[idx])).astype('float64')
         # NOTE: We want images of same size for efficient loading.
@@ -155,7 +156,7 @@ def _compute_valid_locations(disparity_image_paths, sample_ids, img_height,
         disp_img /= 256
         max_disp_img = np.max(disp_img)
         num_valid_locations[i] = (disp_img != 0).sum()
-        # logger.info(disparity_image_paths[idx], " Max disp: ", max_disp_img, "Num valid locations : ",  num_valid_locations[i])
+        # logger.info("{} Max disp: {} Num valid locations : {}".format(disparity_image_paths[idx], max_disp_img, num_valid_locations[i]))
 
     num_valid_locations = int(num_valid_locations.sum())
     valid_locations = np.zeros((num_valid_locations, 4))
@@ -241,37 +242,15 @@ def find_and_store_patch_locations(settings):
     os.makedirs(settings.exp_path, exist_ok=True)
     with open(settings.patch_locations_path, 'wb') as handle:
         pickle.dump(contents_to_save, handle, protocol=pickle.HIGHEST_PROTOCOL)
+    # make read-only to prevent clobber
+    os.chmod(settings.patch_locations_path, stat.S_IREAD | ~stat.S_IWRITE | ~stat.S_IEXEC)
 
-
-##########################################################################
-# Dataset Class
-##########################################################################
-
-def _get_labels(disparity_range, half_range):
-    """Creates the default disparity range for ground truth.  This does not shift
-       the center of the target based upon the disparity value, but creates one
-       array for all disparities.
-
-    Args:
-        disparity range (int): the maximum possible disparity value.
-        half_range (int): half of the maximum possible disparity value.
-
-    Returns:
-        gt (numpy array): the array used as "ground truth"
-
-    """
-    gt = np.zeros((disparity_range))
-
-    # NOTE: Smooth targets are [0.05, 0.2, 0.5, 0.2, 0.05], hard-coded.
-    gt[half_range - 2: half_range + 3] = np.array([0.05, 0.2, 0.5, 0.2, 0.05])
-
-    return gt
 
 ##########################################################################
 # Adaptive Learning Rate
 ##########################################################################
 
-def adjust_learning_rate(optimizer, step, num_steps):
+def adjust_learning_rate(settings, optimizer, step, num_steps):
     """Sets the learning rate to the initial LR decayed by 10 every 30 epochs"""
     step_size = settings.reduction_factor ** (1.0 / num_steps)
     lr = settings.learning_rate * ((1.0 / step_size) ** step)
@@ -285,24 +264,28 @@ def adjust_learning_rate(optimizer, step, num_steps):
 # Training
 ##########################################################################
 
-def train(num_batches, train_dataloader, optimizer, net, criterion, val_dataset_iterator):
+def train(settings, num_batches, train_dataloader, optimizer, net, criterion, val_dataset_iterator, tensorboard_writer):
     counter = []
     loss_history = []
     lr = settings.learning_rate
 
-    logger.info("Number of iterations : ", settings.num_iterations)
+    logger.info("Number of iterations : {}".format(settings.num_iterations))
+    cum_batch_counter = 0
     for epoch in range(settings.num_iterations):
-        # logger.info("Epoch : ", epoch)
+        # logger.info("Epoch : {}".format(epoch))
         for i, data in enumerate(train_dataloader, 0):
-            # logger.info("Batch : ", i)
+            # logger.info("Batch : {}".format(i))
             left_patch, right_patch, labels = data
-            # logger.info("Data Size : ", left_patch.size())
+            # logger.info("Data Size : {}".format(left_patch.size()))
             left_patch, right_patch, labels = left_patch.cuda(), right_patch.cuda(), labels.cuda()
             optimizer.zero_grad()
             left_feature, right_feature = net(left_patch, right_patch)
             loss_inner_product = criterion(left_feature, right_feature, labels)
             loss_inner_product.backward()
             optimizer.step()
+            cum_batch_counter += 1
+            tensorboard_writer.add_scalar('training_loss', loss_inner_product.item(), global_step=cum_batch_counter)
+            tensorboard_writer.add_scalar('learning_rate', lr)
             if i % 1000 == 0:
                 # Note validation set must be >= %1 of training set for iterator to not break when it runs out of validation data
                 left_patch, right_patch, labels = next(val_dataset_iterator)
@@ -310,11 +293,12 @@ def train(num_batches, train_dataloader, optimizer, net, criterion, val_dataset_
                 optimizer.zero_grad()
                 left_feature, right_feature = net(left_patch, right_patch)
                 val_loss_inner_product = criterion(left_feature, right_feature, labels)
+                tensorboard_writer.add_scalar('validation_loss', val_loss_inner_product.item(), cum_batch_counter)
                 logger.info("{}, Epoch: {}, Batch: {}, Learning Rate: {}, Training loss: {}, Validation loss: {}".format(
                     datetime.datetime.now(tz=pytz.utc), epoch, i, lr, loss_inner_product.item(),
                     val_loss_inner_product.item()))
                 loss_history.append(loss_inner_product.item())
-                lr = adjust_learning_rate(optimizer, int(i / 100), int(num_batches / 100))
+                lr = adjust_learning_rate(settings, optimizer, int(i / 100), int(num_batches / 100))
             if i == settings.max_batches:
                 break
     return net
@@ -348,7 +332,7 @@ def calc_error(disparity_prediction, disparity_ground_truth, idx):
     num_error_pixels = (np.abs(masked_prediction_valid - disparity_ground_truth) > 3).sum()
     error += num_error_pixels / num_valid_gt_pixels
 
-    logger.error('{:04f}, for image index {}'.format(error, idx))
+    logger.info('Avg 3-pix error metric = {:04f}, for image index {}'.format(error, idx))
 
     return error
 
@@ -379,7 +363,7 @@ def apply_cost_aggregation(cost_volume):
     # desired, but must be done one at a time fourDimensionPad = (0, 0, 2, 2, 2, 2, 0, 0)
     # Cost volume arrives as 1 x H x W x C
     twoDimensionPad = (2, 2, 2, 2)
-    # logger.info("Cost Volume Shape : ", cost_volume.size())
+    # logger.info("Cost Volume Shape : {}".format(cost_volume.size()))
     cost_volume.permute(3, 0, 1, 2)  # barrel shift right
     cost_volume = F.pad(cost_volume, twoDimensionPad, "reflect", 0)
     cost_volume.permute(1, 2, 3, 0)  # back to original order
@@ -387,7 +371,7 @@ def apply_cost_aggregation(cost_volume):
     return F.avg_pool2d(cost_volume, kernel_size=5, stride=1)
 
 
-def calc_cost_volume(left_features, right_features, mask=None):
+def calc_cost_volume(settings, left_features, right_features, mask=None):
     """
     Calculate the cost volume to generate predicted disparities.  Compute a
     batch matrix multiplication to compute inner-product over entire image and
@@ -405,13 +389,13 @@ def calc_cost_volume(left_features, right_features, mask=None):
     """
     inner_product, win_indices = [], []
     img_height, img_width = right_features.shape[2], right_features.shape[3]
-    # logger.info("right feature shape : ", right_feature.size())
+    # logger.info("right feature shape : {}".format(right_feature.size()))
     row_indices = torch.arange(0, img_width, dtype=torch.int64)
 
     for i in range(img_width):
-        # logger.info("left feature shape before squeeze : ", left_feature.size())
+        # logger.info("left feature shape before squeeze : {}".format(left_feature.size()))
         left_column_features = torch.squeeze(left_features[:, :, :, i])
-        # logger.info("left feature shape after squeeze  : ", left_column_features.size())
+        # logger.info("left feature shape after squeeze  : {}".format(left_column_features.size()))
         start_win = max(0, i - settings.half_range)
         end_win = max(settings.disparity_range, settings.half_range + i + 1)
         start_win = start_win - max(0, end_win - img_width)  # was img_width.value
@@ -419,25 +403,25 @@ def calc_cost_volume(left_features, right_features, mask=None):
 
         right_win_features = torch.squeeze(right_features[:, :, :, start_win:end_win])
         win_indices_column = torch.unsqueeze(row_indices[start_win:end_win], 0)
-        # logger.info("left feature shape      : ", left_column_features.size())
-        # logger.info("right win feature shape : ", right_win_features.size())
+        # logger.info("left feature shape      : {}".format(left_column_features.size()))
+        # logger.info("right win feature shape : {}".format(right_win_features.size()))
         inner_product_column = torch.einsum('ij,ijk->jk', left_column_features,
                                             right_win_features)
         inner_product_column = torch.unsqueeze(inner_product_column, 1)
         inner_product.append(inner_product_column)
         win_indices.append(win_indices_column)
-    # logger.info("inner_product len   : ", len(inner_product))
-    # logger.info("inner_product width : ", len(inner_product[0]))
-    # logger.info("win_indices len   : ", len(win_indices))
-    # logger.info("win_indices width : ", len(win_indices[0]))
+    # logger.info("inner_product len   : {}".format(len(inner_product)))
+    # logger.info("inner_product width : {}".format(len(inner_product[0])))
+    # logger.info("win_indices len   : {}".format(len(win_indices)))
+    # logger.info("win_indices width : {}".format(len(win_indices[0])))
     inner_product = torch.unsqueeze(torch.cat(inner_product, 1), 0)
-    # logger.info("inner_product after unsqueeze  : ", inner_product.size())
+    # logger.info("inner_product after unsqueeze  : {}".format(inner_product.size()))
     win_indices = torch.cat(win_indices, 0).to(device)
-    # logger.info("win_indices shape : ", win_indices.size())
+    # logger.info("win_indices shape : {}".format(win_indices.size()))
     return inner_product, win_indices
 
 
-def inference(left_features, right_features, post_process):
+def inference(settings, left_features, right_features, post_process):
     """Post process model output.
 
     Args:
@@ -448,13 +432,13 @@ def inference(left_features, right_features, post_process):
         disp_prediction (Tensor): disparity prediction.
 
     """
-    cost_volume, win_indices = calc_cost_volume(left_features, right_features)
-    # logger.info("Cost Volume Shape : ", cost_volume.size())
+    cost_volume, win_indices = calc_cost_volume(settings, left_features, right_features)
+    # logger.info("Cost Volume Shape : {}".format(cost_volume.size()))
     img_height, img_width = cost_volume.shape[1], cost_volume.shape[2]  # Now 1 x C X H x W, was 1 x H x W x C
     if post_process:
         cost_volume = apply_cost_aggregation(cost_volume)
     cost_volume = torch.squeeze(cost_volume)
-    # logger.info("Cost Volume Shape (post squeeze): ", cost_volume.size())
+    # logger.info("Cost Volume Shape (post squeeze): {}".format(cost_volume.size()))
     row_indices, _ = torch.meshgrid(torch.arange(0, img_width, dtype=torch.int64),
                                     torch.arange(0, img_height, dtype=torch.int64))
 
@@ -477,7 +461,7 @@ def inference(left_features, right_features, post_process):
     return disp_prediction
 
 def setup_filesystem(settings):
-    os.makedirs(settings.exp_path, exist_ok=False)
+    os.makedirs(settings.exp_path, exist_ok=True)
     os.makedirs(settings.image_dir, exist_ok=True)
     settings_filename = os.path.join(settings.exp_path, 'settings.log')
     with open(settings_filename, 'w') as settings_file:
@@ -585,7 +569,7 @@ def main():
     log_file = os.path.join(settings.exp_path, 'log.log')
     global logger
     logger = setup_logging(log_path=log_file, log_level=settings.log_level, logger=LOGGER)
-
+    #- logger.info('PYTHONPATH = ' + str(sys.path))
     random.seed(settings.seed)
 
     patch_locations_loaded = 'patch_locations' in locals() or 'patch_locations' in globals()
@@ -594,7 +578,7 @@ def main():
             logger.info("New patch file being generated")
             find_and_store_patch_locations(settings)
         with open(settings.patch_locations_path, 'rb') as handle:
-            logger.info("Loading existing patch file")
+            logger.info("Loading existing patch file " + settings.patch_locations_path)
             patch_locations = pickle.load(handle)
     else:
         logger.info("Patch file already loaded")
@@ -609,24 +593,31 @@ def main():
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     logger.info('Using device {}'.format(device))
     torch.backends.cudnn.benchmark = True
+
+    # torchsummary, below, writes to stdout so redirect
+    stdout_original = sys.stdout
+    sys.stdout = open(os.path.join(settings.exp_path, 'model.log'), 'w')
     # Declare Siamese Network
     if settings.patch_size == 13:
         net = SiameseNetwork13().cuda()
         model = SiameseNetwork13().to(device)
-        model_description, _ = torchsummary.summary_string(model, input_size=[(3, 13, 13), (3, 13, 213)])
+        torchsummary.summary(model, input_size=[(3, 13, 13), (3, 13, 213)])
     else:
         net = SiameseNetwork().cuda()
         model = SiameseNetwork().to(device)
-        model_description, _ = torchsummary.summary_string(model, input_size=[(3, 37, 37), (3, 37, 237)])
-    logger.info('\n' + model_description)
+        torchsummary.summary(model, input_size=[(3, 37, 37), (3, 37, 237)])
     sys.stdout.flush()  # flush torchsummary.summary output
+    sys.stdout = stdout_original
+
+    tensorboard_writer =\
+        SummaryWriter(log_dir=os.path.join(settings.result_dir, 'tensorboard', settings.exp_name))
 
     # ----- TRAINING -----
 
     if settings.phase == 'training' or settings.phase == 'both':
         training_dataset = SiameseDataset(settings, patch_locations['train'])
         # logger.info("Batch Size : ", settings.batch_size)
-        logger.info('training_dataset size = ', len(training_dataset))
+        logger.info('training_dataset size = {}'.format(len(training_dataset)))
         logger.info("Loading training dataset")
         train_dataloader = DataLoader(training_dataset,
                                       shuffle=True,
@@ -634,7 +625,7 @@ def main():
                                       batch_size=settings.batch_size)
 
         val_dataset = SiameseDataset(settings, patch_locations['val'])
-        logger.info('training_dataset size = ', len(training_dataset))
+        logger.info('training_dataset size = {}'.format(len(training_dataset)))
         # logger.info("Batch Size : ", settings.batch_size)
         logger.info("Loading validation dataset")
         val_dataloader = DataLoader(val_dataset,
@@ -645,7 +636,7 @@ def main():
         val_dataset_iterator = iter(val_dataloader)
 
         num_batches = len(train_dataloader)
-        logger.info("Number of ", settings.batch_size, "patch batches", num_batches)
+        logger.info("Number of {} patch batches {}".format(settings.batch_size, num_batches))
 
         # Decalre Loss Function
         criterion = InnerProductLoss()
@@ -654,7 +645,7 @@ def main():
 
         logger.info("Start Training")
         # Train the model
-        model = train(num_batches, train_dataloader, optimizer, net, criterion, val_dataset_iterator)
+        model = train(settings, num_batches, train_dataloader, optimizer, net, criterion, val_dataset_iterator, tensorboard_writer)
         torch.save(model.state_dict(), settings.model_path)
         logger.info("Model Saved Successfully")
     # /if 
@@ -682,28 +673,28 @@ def main():
 
         error_dict = {}
         for idx in test_image_indices:
-            left_image_in = _load_image(left_image_paths[idx], settings.img_height, settings.img_width)
-            right_image = _load_image(right_image_paths[idx], settings.img_height, settings.img_width)
-            disparity_ground_truth = _load_disparity(disparity_image_paths[idx], settings.img_height, settings.img_width)
+            left_image_in = load_image(left_image_paths[idx], settings.img_height, settings.img_width)
+            right_image = load_image(right_image_paths[idx], settings.img_height, settings.img_width)
+            disparity_ground_truth = load_disparity(disparity_image_paths[idx], settings.img_height, settings.img_width)
 
             # two DimenionPad specified from last to first the padding on the dimesion, so the first
             # two elements of the tuple specify the padding before / after the last dimension
             # while the third and forth elemements of the tuple specify the padding before / after
             # the second to last dimension
             twoDimensionPad = (
-            settings.half_patch_size, settings.half_patch_size, settings.half_patch_size, settings.half_patch_size)
+                settings.half_patch_size, settings.half_patch_size, settings.half_patch_size, settings.half_patch_size)
             left_image = F.pad(left_image_in, twoDimensionPad, "constant", 0)
             right_image = F.pad(right_image, twoDimensionPad, "constant", 0)
             left_image = torch.unsqueeze(left_image, 0)
             right_image = torch.unsqueeze(right_image, 0)
-            # logger.info("Left image size  : ", left_image.size())
-            # logger.info("Right image size : ", right_image.size())
+            # logger.info("Left image size  : {}".format(left_image.size()))
+            # logger.info("Right image size : {}".format(right_image.size()))
             # left_feature, right_feature = model(left_image.to(device), right_image.to(device))
             left_feature, right_feature = model(left_image.to(device), right_image.to(device))
-            # logger.info("Left feature size  : ", left_feature.size())
-            # logger.info("Right feature size : ", right_feature.size())
-            # logger.info("Left Feature on Cuda: ", left_feature.get_device())
-            disp_prediction = inference(left_feature, right_feature, post_process=True)
+            # logger.info("Left feature size  : {}".format(left_feature.size()))
+            # logger.info("Right feature size : {}".format(right_feature.size()))
+            # logger.info("Left Feature on Cuda: {}".format(left_feature.get_device()))
+            disp_prediction = inference(settings, left_feature, right_feature, post_process=True)
             error_dict[idx] = calc_error(disp_prediction.cpu(), disparity_ground_truth, idx)
             disp_image = prediction_to_image(disp_prediction.cpu())
             save_images([left_image_in.permute(1, 2, 0), disp_image], 1, ['left image', 'disparity'], settings.image_dir,
@@ -713,10 +704,10 @@ def main():
 
         if settings.test_all:
             for idx in train_image_indices:
-                left_image_in = _load_image(left_image_paths[idx], settings.img_height, settings.img_width)
-                right_image = _load_image(right_image_paths[idx], settings.img_height, settings.img_width)
-                disparity_ground_truth = _load_disparity(disparity_image_paths[idx], settings.img_height,
-                                                         settings.img_width)
+                left_image_in = load_image(left_image_paths[idx], settings.img_height, settings.img_width)
+                right_image = load_image(right_image_paths[idx], settings.img_height, settings.img_width)
+                disparity_ground_truth = load_disparity(disparity_image_paths[idx], settings.img_height,
+                                                        settings.img_width)
                 twoDimensionPad = (
                 settings.half_patch_size, settings.half_patch_size, settings.half_patch_size, settings.half_patch_size)
                 left_image = F.pad(left_image_in, twoDimensionPad, "constant", 0)
@@ -724,7 +715,7 @@ def main():
                 left_image = torch.unsqueeze(left_image, 0)
                 right_image = torch.unsqueeze(right_image, 0)
                 left_feature, right_feature = model(left_image.to(device), right_image.to(device))
-                disp_prediction = inference(left_feature, right_feature, post_process=True)
+                disp_prediction = inference(settings, left_feature, right_feature, post_process=True)
                 error_dict[idx] = calc_error(disp_prediction.cpu(), disparity_ground_truth, idx)
                 disp_image = prediction_to_image(disp_prediction.cpu())
                 save_images([left_image_in.permute(1, 2, 0), disp_image], 1, ['left image', 'disparity'],
@@ -738,8 +729,13 @@ def main():
         average_error = 0.0
         for idx in error_dict:
             average_error += error_dict[idx] / len(error_dict)
-        logger.info("Average Error : ", average_error)
+        logger.info("Average Error : {}".format(average_error))
+        tensorboard_writer.add_scalar('average_disparity_error', average_error, global_step=idx)
 
+    # Freeze results (for experiment) dir to prevent accidental clobber
+    os.chmod(settings.exp_path, stat.S_IREAD | ~stat.S_IWRITE | ~stat.S_IEXEC)
+
+# /main()
 
 if __name__ == "__main__":
     main()

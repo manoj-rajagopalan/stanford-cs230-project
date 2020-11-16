@@ -1,4 +1,6 @@
+import torch
 from torch.utils.data import Dataset
+from util.img_utils import *
 
 class SiameseDataset(Dataset):
     """Dataset class to provide training and validation data.
@@ -26,12 +28,12 @@ class SiameseDataset(Dataset):
         self._settings = settings
         left_image_paths, right_image_paths, disparity_paths = \
             load_image_paths(settings.data_path,
-                             settings.left_img_folder,
-                             settings.right_img_folder,
-                             settings.disparity_folder)
+                              settings.left_img_folder,
+                              settings.right_img_folder,
+                              settings.disparity_folder)
 
         self.left_images, self.right_images, self.disparity_images = \
-            _load_images(left_image_paths,
+            load_images(left_image_paths,
                          right_image_paths,
                          disparity_paths,
                          settings.img_height,
@@ -80,7 +82,7 @@ class SiameseDataset(Dataset):
                       right_center_x - self._settings.half_patch_size - self._settings.half_range:
                       right_center_x + self._settings.half_patch_size + self._settings.half_range + 1]
 
-        labels = _get_labels(self._settings.disparity_range, self._settings.half_range)
+        labels = get_labels(self._settings.disparity_range, self._settings.half_range)
 
         return left_patch, right_patch, labels
 
