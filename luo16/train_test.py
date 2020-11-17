@@ -298,7 +298,7 @@ def train(settings, num_batches, train_dataloader, optimizer, net, criterion,
                 left_feature, right_feature = net(left_patch, right_patch)
                 val_loss = criterion(left_feature, right_feature, labels)
                 tensorboard_writer.add_scalar('validation_loss', val_loss.item(), cum_batch_counter)
-                tensorboard_writer.add_scalar('diff_norm_variance', diff_norm_variance.item(), cum_batch_counter)
+                #- tensorboard_writer.add_scalar('diff_norm_variance', diff_norm_variance.item(), cum_batch_counter)
                 logger.info("{}, Epoch: {}, Batch: {}, Learning Rate: {}, Training loss: {}, Validation loss: {}".format(
                     datetime.datetime.now(tz=pytz.utc), epoch, i, lr, loss.item(), val_loss.item()))
                 loss_history.append(loss.item())
@@ -506,6 +506,7 @@ def process_cmdline_args():
             exp_name = '37x37_ref'
             result_dir = 'results'  # result directory
             loss_fn = 'inner_product_softmax' # or 'diff_norm_gaussian'
+            diff_norm_variance = None
             log_level = 'INFO'  # choices = ['DEBUG', 'INFO'], help='log-level to use')
             batch_size = 32  # type=int, help='batch-size to use')
             dataset = 'kitti_2015'  # , choices=['kitti_2012', 'kitti_2015'], help='dataset')
@@ -535,6 +536,8 @@ def process_cmdline_args():
         parser.add_argument('--result-dir', default='/cs230-datasets/proj/results', type=str, help='results directory')
         parser.add_argument('--loss-fn', required=True, type=str, choices=['inner_product_softmax', 'diff_norm_gaussian'],
                             help='Loss function type')
+        parser.add_argument('--diff-norm-variance', type=float, default=1.0,
+                            help='Variance for the diff-norm-gaussian loss function')
         parser.add_argument('--log-level', default='INFO', choices=['DEBUG', 'INFO'], help='log-level to use')
         parser.add_argument('--batch-size', default=128, type=int, help='batch-size to use')
         parser.add_argument('--dataset', default='kitti_2015', choices=['kitti_2012', 'kitti_2015'], help='dataset')
@@ -669,8 +672,7 @@ def main():
         if settings.loss_fn == 'inner_product_softmax':
             criterion = InnerProductSoftmaxLoss()
         elif settings.loss_fn == 'diff_norm_gaussian':
-            diff_norm_variance = torch.Tensor(1.0, requires_grad=True)
-            criterion = functools.partial(DiffNormGaussianLoss(), variance=diff_norm_variance)
+            criterion = functools.partial(DiffNormGaussianLoss(), variance=settings.diff_norm_variance)
         else:
             logger.error('Unknown loss function: ' + settings.loss_fn)
             exit(1)
