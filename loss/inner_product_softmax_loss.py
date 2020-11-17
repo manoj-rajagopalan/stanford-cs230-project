@@ -2,7 +2,7 @@ import torch
 from torch.nn import Module
 import torch.nn.functional as F
 
-class InnerProductLoss(Module):
+class InnerProductSoftmaxLoss(Module):
     """
        To aid in training the inner product loss calculates the softmax with
        logits on a lables which have a probability distribution around the
@@ -10,7 +10,7 @@ class InnerProductLoss(Module):
     """
 
     def __init__(self):
-        super(InnerProductLoss, self).__init__()
+        super(InnerProductSoftmaxLoss, self).__init__()
 
     def forward(self, left_feature, right_feature, labels):
         """Calculate the loss describe above.
@@ -55,4 +55,4 @@ class InnerProductLoss(Module):
 
         return loss
 
-# /class InnerProductLoss()
+# /class InnerProductSoftmaxLoss()
