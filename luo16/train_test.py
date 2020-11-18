@@ -461,7 +461,7 @@ def inference(settings, left_features, right_features, post_process):
     cost_volume, win_indices = calc_cost_volume(settings, left_features, right_features)
     # logger.info("Cost Volume Shape : {}".format(cost_volume.size()))
     img_height, img_width = cost_volume.shape[1], cost_volume.shape[2]  # Now 1 x C X H x W, was 1 x H x W x C
-    if post_process and settings.cost_volume_method == 'inner_product_softmax'
+    if post_process and settings.cost_volume_method == 'inner_product_softmax':
         cost_volume = apply_cost_aggregation(cost_volume)
     cost_volume = torch.squeeze(cost_volume)
     # logger.info("Cost Volume Shape (post squeeze): {}".format(cost_volume.size()))
