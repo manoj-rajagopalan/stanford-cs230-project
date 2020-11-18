@@ -288,8 +288,8 @@ def train(settings, num_batches, train_dataloader, optimizer, model, criterion,
             # logger.info("Data Size : {}".format(left_patch.size()))
             left_patch, right_patch, labels = left_patch.cuda(), right_patch.cuda(), labels.cuda()
             optimizer.zero_grad()
-            left_feature, right_feature = model(left_patch, right_patch)
-            loss = criterion(left_feature, right_feature, labels)
+            inner_product = model(left_patch, right_patch)
+            loss = criterion(inner_product, labels)
             loss.backward()
             optimizer.step()
             cum_batch_counter += 1
@@ -300,8 +300,8 @@ def train(settings, num_batches, train_dataloader, optimizer, model, criterion,
                 left_patch, right_patch, labels = next(val_dataset_iterator)
                 left_patch, right_patch, labels = left_patch.cuda(), right_patch.cuda(), labels.cuda()
                 optimizer.zero_grad()
-                left_feature, right_feature = model(left_patch, right_patch)
-                val_loss = criterion(left_feature, right_feature, labels)
+                inner_product = model(left_patch, right_patch)
+                val_loss = criterion(inner_product, labels)
                 tensorboard_writer.add_scalar('validation_loss', val_loss.item(), cum_batch_counter)
                 logger.info("{}, Epoch: {}, Batch: {}, Learning Rate: {}, Training loss: {}, Validation loss: {}".format(
                     datetime.datetime.now(tz=pytz.utc), epoch, i, lr, loss.item(), val_loss.item()))
@@ -381,7 +381,7 @@ def apply_cost_aggregation(cost_volume):
     return F.avg_pool2d(cost_volume, kernel_size=5, stride=1)
 
 
-def calc_cost_volume(settings, left_features, right_features, metric_tensor, cost_volume_method, mask=None):
+def calc_cost_volume(settings, feature_vec_inner_prods, cost_volume_method, mask=None):
     """
     Calculate the cost volume to generate predicted disparities.  Compute a
     batch matrix multiplication to compute inner-product over entire image and
@@ -737,7 +737,7 @@ def main():
             # logger.info("Left image size  : {}".format(left_image.size()))
             # logger.info("Right image size : {}".format(right_image.size()))
             # left_feature, right_feature = model(left_image.to(device), right_image.to(device))
-            left_feature, right_feature = model(left_image.to(device), right_image.to(device))
+            left_feature, right_feature = model.features(left_image.to(device), right_image.to(device))
             # logger.info("Left feature size  : {}".format(left_feature.size()))
             # logger.info("Right feature size : {}".format(right_feature.size()))
             # logger.info("Left Feature on Cuda: {}".format(left_feature.get_device()))
@@ -761,7 +761,7 @@ def main():
                 right_image = F.pad(right_image, twoDimensionPad, "constant", 0)
                 left_image = torch.unsqueeze(left_image, 0)
                 right_image = torch.unsqueeze(right_image, 0)
-                left_feature, right_feature = model(left_image.to(device), right_image.to(device))
+                left_feature, right_feature = model.features(left_image.to(device), right_image.to(device))
                 disp_prediction = inference(settings, left_feature, right_feature, post_process=True)
                 error_dict[idx] = calc_error(disp_prediction.cpu(), disparity_ground_truth, idx)
                 disp_image = prediction_to_image(disp_prediction.cpu())
