@@ -47,11 +47,16 @@ import torchsummary
 
 # Project code imports
 from util.img_utils import *
+
 from dataset.siamese_dataset import SiameseDataset
+
 from net.siamese_network import SiameseNetwork
 from net.siamese_network_13 import SiameseNetwork13
-from loss.inner_product_softmax_loss import InnerProductSoftmaxLoss
-from loss.diff_norm_gaussian_loss import DiffNormGaussianLoss
+from net.inner_product_network import InnerProductNetwork
+from net.diff_norm_sqr_network import DiffNormSqrNetwork
+
+from loss.cross_entropy_of_softmax import CrossEntropyOfSoftmax
+from loss.cross_entropy_of_gaussian import CrossEntropyOfGaussian
 
 ##########################################################################
 # Utilities
@@ -266,7 +271,7 @@ def adjust_learning_rate(settings, optimizer, step, num_steps):
 # Training
 ##########################################################################
 
-def train(settings, num_batches, train_dataloader, optimizer, net, criterion,
+def train(settings, num_batches, train_dataloader, optimizer, model, criterion,
           val_dataset_iterator, tensorboard_writer):
 
     counter = []
@@ -283,7 +288,7 @@ def train(settings, num_batches, train_dataloader, optimizer, net, criterion,
             # logger.info("Data Size : {}".format(left_patch.size()))
             left_patch, right_patch, labels = left_patch.cuda(), right_patch.cuda(), labels.cuda()
             optimizer.zero_grad()
-            left_feature, right_feature = net(left_patch, right_patch)
+            left_feature, right_feature = model(left_patch, right_patch)
             loss = criterion(left_feature, right_feature, labels)
             loss.backward()
             optimizer.step()
@@ -295,17 +300,16 @@ def train(settings, num_batches, train_dataloader, optimizer, net, criterion,
                 left_patch, right_patch, labels = next(val_dataset_iterator)
                 left_patch, right_patch, labels = left_patch.cuda(), right_patch.cuda(), labels.cuda()
                 optimizer.zero_grad()
-                left_feature, right_feature = net(left_patch, right_patch)
+                left_feature, right_feature = model(left_patch, right_patch)
                 val_loss = criterion(left_feature, right_feature, labels)
                 tensorboard_writer.add_scalar('validation_loss', val_loss.item(), cum_batch_counter)
-                #- tensorboard_writer.add_scalar('diff_norm_variance', diff_norm_variance.item(), cum_batch_counter)
                 logger.info("{}, Epoch: {}, Batch: {}, Learning Rate: {}, Training loss: {}, Validation loss: {}".format(
                     datetime.datetime.now(tz=pytz.utc), epoch, i, lr, loss.item(), val_loss.item()))
                 loss_history.append(loss.item())
                 lr = adjust_learning_rate(settings, optimizer, int(i / 100), int(num_batches / 100))
             if i == settings.max_batches:
                 break
-    return net
+    return model
 
 
 ##########################################################################
@@ -335,10 +339,10 @@ def calc_error(disparity_prediction, disparity_ground_truth, idx):
     # Use 3-pixel error metric for now.
     num_error_pixels = (np.abs(masked_prediction_valid - disparity_ground_truth) > 3).sum()
     error += num_error_pixels / num_valid_gt_pixels
-    max_abs_error = np.max(np.abs(masked_prediction_valid - disparity_ground_truth))
+    # max_abs_error = np.max(np.abs(masked_prediction_valid - disparity_ground_truth))
 
     logger.info('Avg 3-pix error metric = {:04f}, for image index {}'.format(error, idx))
-    logger.info('Max 3-pix error metrics = {:04f}, for image index {}'.format(max_abs_error, idx))
+    # logger.info('Max 3-pix error metrics = {:04f}, for image index {}'.format(max_abs_error, idx))
 
     return error
 
@@ -377,7 +381,7 @@ def apply_cost_aggregation(cost_volume):
     return F.avg_pool2d(cost_volume, kernel_size=5, stride=1)
 
 
-def calc_cost_volume(settings, left_features, right_features, loss_fn, mask=None):
+def calc_cost_volume(settings, left_features, right_features, metric_tensor, cost_volume_method, mask=None):
     """
     Calculate the cost volume to generate predicted disparities.  Compute a
     batch matrix multiplication to compute inner-product over entire image and
@@ -386,7 +390,8 @@ def calc_cost_volume(settings, left_features, right_features, loss_fn, mask=None
     Args:
         left_features (Tensor): left image features post forward pass through CNN.
         right_features (Tensor): right image features post forward pass through CNN.
-        loss_fn (string): 'inner_product_softmax' or 'diff_norm_gaussian'
+        metric_tensor (Tensor): For 'diff_norm_sqr_gaussian' case, the metric to weight the norm.
+        cost_volume_method (string): 'inner_product_softmax' or 'diff_norm_sqr_gaussian'
         mask (, optional): mask
 
     Returns:
@@ -394,16 +399,16 @@ def calc_cost_volume(settings, left_features, right_features, loss_fn, mask=None
         of tensor 1 x H x W x 201
 
     """
-    assert loss_fn in ['inner_product_softmax', 'diff_norm_gaussian']
+
     inner_product, win_indices = [], []
     img_height, img_width = right_features.shape[2], right_features.shape[3]
-    # logger.info("right feature shape : {}".format(right_feature.size()))
+    logger.info("right feature shape : {}".format(right_feature.size()))
     row_indices = torch.arange(0, img_width, dtype=torch.int64)
 
     for i in range(img_width):
-        # logger.info("left feature shape before squeeze : {}".format(left_feature.size()))
+        logger.info("left feature shape before squeeze : {}".format(left_feature.size()))
         left_column_features = torch.squeeze(left_features[:, :, :, i])
-        # logger.info("left feature shape after squeeze  : {}".format(left_column_features.size()))
+        logger.info("left feature shape after squeeze  : {}".format(left_column_features.size()))
         start_win = max(0, i - settings.half_range)
         end_win = max(settings.disparity_range, settings.half_range + i + 1)
         start_win = start_win - max(0, end_win - img_width)  # was img_width.value
@@ -413,13 +418,14 @@ def calc_cost_volume(settings, left_features, right_features, loss_fn, mask=None
         win_indices_column = torch.unsqueeze(row_indices[start_win:end_win], 0)
         # logger.info("left feature shape      : {}".format(left_column_features.size()))
         # logger.info("right win feature shape : {}".format(right_win_features.size()))
-        if loss_fn == 'inner_product_softmax':
+        if cost_volume_method == 'inner_product_softmax':
             inner_product_column = torch.einsum('ij,ijk->jk', left_column_features,
                                                 right_win_features)
 
-        elif loss_fn == 'diff_norm_gaussian':
+        else: # cost_volume_method == 'diff_norm_sqr_gaussian'
             left_win_features = left_column_features.resize_as(right_win_features)
             diff_win_features = right_win_features - left_win_features
+            assert False, 'TODO'
             inner_product_column = -torch.einsum('ij,ijk->jk', diff_win_features, diff_win_features)
             # note the negative sign - required for argmax that is taken in calling function (inference())
             # The classification probabilities are exp(-r^2 / variance) and here we are computing r^2
@@ -440,7 +446,7 @@ def calc_cost_volume(settings, left_features, right_features, loss_fn, mask=None
     return inner_product, win_indices
 
 
-def inference(settings, left_features, right_features, loss_fn, post_process):
+def inference(settings, left_features, right_features, post_process):
     """Post process model output.
 
     Args:
@@ -454,7 +460,7 @@ def inference(settings, left_features, right_features, loss_fn, post_process):
         disp_prediction (Tensor): disparity prediction.
 
     """
-    cost_volume, win_indices = calc_cost_volume(settings, left_features, right_features, loss_fn)
+    cost_volume, win_indices = calc_cost_volume(settings, left_features, right_features, settings.cost_volume_method)
     # logger.info("Cost Volume Shape : {}".format(cost_volume.size()))
     img_height, img_width = cost_volume.shape[1], cost_volume.shape[2]  # Now 1 x C X H x W, was 1 x H x W x C
     if post_process:
@@ -505,7 +511,7 @@ def process_cmdline_args():
             data_path = '/content/kitti2015_full_min/'  # join('data', settings.dataset, settings.phase))
             exp_name = '37x37_ref'
             result_dir = 'results'  # result directory
-            loss_fn = 'inner_product_softmax' # or 'diff_norm_gaussian'
+            cost_volume_method = 'inner_product_softmax' # or 'diff_norm_sqr_gaussian'
             diff_norm_variance = None
             log_level = 'INFO'  # choices = ['DEBUG', 'INFO'], help='log-level to use')
             batch_size = 32  # type=int, help='batch-size to use')
@@ -534,10 +540,9 @@ def process_cmdline_args():
         parser.add_argument('--data-path', default='kitti_2015', type=str, help='root location of kitti_dataset')
         parser.add_argument('--exp-name', required=True, type=str, help='name of experiment')
         parser.add_argument('--result-dir', default='/cs230-datasets/proj/results', type=str, help='results directory')
-        parser.add_argument('--loss-fn', required=True, type=str, choices=['inner_product_softmax', 'diff_norm_gaussian'],
+        parser.add_argument('--cost-volume-method', required=True, type=str,
+                            choices=['inner_product_softmax', 'diff_norm_sqr_gaussian'],
                             help='Loss function type')
-        parser.add_argument('--diff-norm-variance', type=float, default=1.0,
-                            help='Variance for the diff-norm-gaussian loss function')
         parser.add_argument('--log-level', default='INFO', choices=['DEBUG', 'INFO'], help='log-level to use')
         parser.add_argument('--batch-size', default=128, type=int, help='batch-size to use')
         parser.add_argument('--dataset', default='kitti_2015', choices=['kitti_2012', 'kitti_2015'], help='dataset')
@@ -548,7 +553,7 @@ def process_cmdline_args():
         parser.add_argument('--reduction-factor', default=50, type=int,
                             help='ratio of the end learning rate to the starting learning rate')
         parser.add_argument('--find-patch-locations', default=False, help='find and store patch locations')
-        parser.add_argument('--num_iterations', default=1, type=int, help='number of training iterations')
+        parser.add_argument('--num-iterations', default=1, type=int, help='number of training iterations')
         parser.add_argument('--phase', default='training', choices=['training', 'testing', 'both'],
                             help='training or testing, if testing perform inference on test set.')
         parser.add_argument('--post-process', default=False, help='toggle use of post-processing.')
@@ -561,6 +566,8 @@ def process_cmdline_args():
 
         settings = parser.parse_args()
     # /if-else
+
+    assert settings.cost_volume_method in ['inner_product_softmax', 'diff_norm_sqr_gaussian']
 
     # Settings, hyper-parameters.
     settings.data_path = os.path.join(settings.data_path, 'training')
@@ -626,18 +633,24 @@ def main():
     logger.info('Using device {}'.format(device))
     torch.backends.cudnn.benchmark = True
 
+    # ----- Instantiate Model -----
+    
     # torchsummary, below, writes to stdout so redirect
     stdout_original = sys.stdout
     sys.stdout = open(os.path.join(settings.exp_path, 'model.log'), 'w')
-    # Declare Siamese Network
+
     if settings.patch_size == 13:
-        net = SiameseNetwork13().cuda()
-        model = SiameseNetwork13().to(device)
+        siamese_subnet = SiameseNetwork13()
+    else:
+        siamese_subnet = SiameseNetwork()
+
+    if settings.cost_volume_method == 'inner_product_softmax':
+        model = InnerProductNetwork(siamese_subnet).to(device)
         torchsummary.summary(model, input_size=[(3, 13, 13), (3, 13, 213)])
     else:
-        net = SiameseNetwork().cuda()
-        model = SiameseNetwork().to(device)
+        model = DiffNormSqrNetwork(siamese_subnet).to(device)
         torchsummary.summary(model, input_size=[(3, 37, 37), (3, 37, 237)])
+
     sys.stdout.flush()  # flush torchsummary.summary output
     sys.stdout = stdout_original
 
@@ -669,18 +682,15 @@ def main():
         num_batches = len(train_dataloader)
         logger.info("Number of {} patch batches {}".format(settings.batch_size, num_batches))
 
-        if settings.loss_fn == 'inner_product_softmax':
-            criterion = InnerProductSoftmaxLoss()
-        elif settings.loss_fn == 'diff_norm_gaussian':
-            criterion = functools.partial(DiffNormGaussianLoss(), variance=settings.diff_norm_variance)
-        else:
-            logger.error('Unknown loss function: ' + settings.loss_fn)
-            exit(1)
+        if settings.cost_volume_method == 'inner_product_softmax':
+            criterion = CrossEntropyOfSoftmax()
+        else: # settings.cost_volume_method == 'diff_norm_sqr_gaussian'
+            criterion = CrossEntropyOfGaussian()
 
-        optimizer = torch.optim.Adam(net.parameters(), lr=settings.learning_rate)
+        optimizer = torch.optim.Adam(model.parameters(), lr=settings.learning_rate)
 
         logger.info("Start Training")
-        model = train(settings, num_batches, train_dataloader, optimizer, net, criterion,
+        model = train(settings, num_batches, train_dataloader, optimizer, model, criterion,
                       val_dataset_iterator, tensorboard_writer)
         torch.save(model.state_dict(), settings.model_path)
         logger.info("Model Saved Successfully")
@@ -731,7 +741,7 @@ def main():
             # logger.info("Left feature size  : {}".format(left_feature.size()))
             # logger.info("Right feature size : {}".format(right_feature.size()))
             # logger.info("Left Feature on Cuda: {}".format(left_feature.get_device()))
-            disp_prediction = inference(settings, left_feature, right_feature, settings.loss_fn, post_process=True)
+            disp_prediction = inference(settings, left_feature, right_feature, post_process=True)
             error_dict[idx] = calc_error(disp_prediction.cpu(), disparity_ground_truth, idx)
             disp_image = prediction_to_image(disp_prediction.cpu())
             save_images([left_image_in.permute(1, 2, 0), disp_image], 1, ['left image', 'disparity'], settings.image_dir,
@@ -752,7 +762,7 @@ def main():
                 left_image = torch.unsqueeze(left_image, 0)
                 right_image = torch.unsqueeze(right_image, 0)
                 left_feature, right_feature = model(left_image.to(device), right_image.to(device))
-                disp_prediction = inference(settings, left_feature, right_feature, settings.loss_fn, post_process=True)
+                disp_prediction = inference(settings, left_feature, right_feature, post_process=True)
                 error_dict[idx] = calc_error(disp_prediction.cpu(), disparity_ground_truth, idx)
                 disp_image = prediction_to_image(disp_prediction.cpu())
                 save_images([left_image_in.permute(1, 2, 0), disp_image], 1, ['left image', 'disparity'],

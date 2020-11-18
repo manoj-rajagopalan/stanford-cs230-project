@@ -1,6 +1,13 @@
 import torch.nn as nn
 
 class SiameseNetwork(nn.Module):
+    """
+        Siamese sub-network that extract features from left and right patches.
+        Used inside InnerProductNetwork and DiffNormSqrNetwork.
+    """
+
+    FEATURE_VECTOR_SIZE = 64
+
     def __init__(self):
         super(SiameseNetwork, self).__init__()
 
