@@ -639,15 +639,17 @@ def main():
 
     if settings.patch_size == 13:
         siamese_subnet = SiameseNetwork13()
+        input_size = [(3, 13, 13), (3, 13, 213)]
     else:
         siamese_subnet = SiameseNetwork()
+        input_size = [(3, 37, 37), (3, 37, 237)]
 
     if settings.cost_volume_method == 'inner_product_softmax':
         model = InnerProductNetwork(siamese_subnet).to(device)
-        torchsummary.summary(model, input_size=[(3, 13, 13), (3, 13, 213)])
+        torchsummary.summary(model, input_size=input_size)
     else:
         model = DiffNormSqrNetwork(siamese_subnet).to(device)
-        torchsummary.summary(model, input_size=[(3, 37, 37), (3, 37, 237)])
+        torchsummary.summary(model, input_size=input_size)
 
     sys.stdout.flush()  # flush torchsummary.summary output
     sys.stdout = stdout_original
