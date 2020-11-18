@@ -17,4 +17,8 @@ class DiffNormSqrNetwork(torch.nn.Module):
         feature_vec_diff_norm_sqr = self.feature_vec_diff_norm_sqr(left_feature, right_feature)
         return feature_vec_diff_norm_sqr
 
+    def features(self, left_patch, right_patch):
+        left_feature, right_feature = self.siamese_network(left_patch, right_patch)
+        return left_feature, right_feature
+
 # /class DiffNormSqrNetwork

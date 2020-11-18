@@ -17,4 +17,9 @@ class InnerProductNetwork(torch.nn.Module):
         feature_vec_inner_product = self.feature_vec_inner_product(left_feature, right_feature)
         return feature_vec_inner_product
 
+    def features(self, left_patch, right_patch):
+        left_feature, right_feature = self.siamese_network(left_patch, right_patch)
+        return left_feature, right_feature
+
+
 # /class InnerProductNetwork
