@@ -445,12 +445,13 @@ def calc_cost_volume(settings, left_features, right_features, metric_tensor, mas
     return inner_product, win_indices
 
 
-def inference(settings, left_features, right_features, post_process):
+def inference(settings, left_features, right_features, metric_tensor, post_process):
     """Post process model output.
 
     Args:
         left_features (Tensor): left input cost volume.
         right_features (Tensor): right input cost volume.
+        metric_tensor (Tensor): used in diff_norm_sqr_gaussian cost-volume method
         post_process (Bool): perform cost-volume aggregation or not
 
 
@@ -458,7 +459,7 @@ def inference(settings, left_features, right_features, post_process):
         disp_prediction (Tensor): disparity prediction.
 
     """
-    cost_volume, win_indices = calc_cost_volume(settings, left_features, right_features)
+    cost_volume, win_indices = calc_cost_volume(settings, left_features, right_features, metric_tensor)
     # logger.info("Cost Volume Shape : {}".format(cost_volume.size()))
     img_height, img_width = cost_volume.shape[1], cost_volume.shape[2]  # Now 1 x C X H x W, was 1 x H x W x C
     if post_process and settings.cost_volume_method == 'inner_product_softmax':
@@ -741,7 +742,7 @@ def main():
             # logger.info("Left feature size  : {}".format(left_feature.size()))
             # logger.info("Right feature size : {}".format(right_feature.size()))
             # logger.info("Left Feature on Cuda: {}".format(left_feature.get_device()))
-            disp_prediction = inference(settings, left_feature, right_feature, post_process=True)
+            disp_prediction = inference(settings, left_feature, right_feature, model.metric_tensor(), post_process=True)
             error_dict[idx] = calc_error(disp_prediction.cpu(), disparity_ground_truth, idx)
             disp_image = prediction_to_image(disp_prediction.cpu())
             save_images([left_image_in.permute(1, 2, 0), disp_image], 1, ['left image', 'disparity'], settings.image_dir,
@@ -762,7 +763,7 @@ def main():
                 left_image = torch.unsqueeze(left_image, 0)
                 right_image = torch.unsqueeze(right_image, 0)
                 left_feature, right_feature = model.features(left_image.to(device), right_image.to(device))
-                disp_prediction = inference(settings, left_feature, right_feature, post_process=True)
+                disp_prediction = inference(settings, left_feature, right_feature, model.metric_tensor(), post_process=True)
                 error_dict[idx] = calc_error(disp_prediction.cpu(), disparity_ground_truth, idx)
                 disp_image = prediction_to_image(disp_prediction.cpu())
                 save_images([left_image_in.permute(1, 2, 0), disp_image], 1, ['left image', 'disparity'],
