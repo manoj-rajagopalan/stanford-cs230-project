@@ -1,6 +1,9 @@
 import torch.nn as nn
 
 class SiameseNetwork13(nn.Module):
+
+    FEATURE_VECTOR_SIZE = 64
+
     def __init__(self):
         super(SiameseNetwork13, self).__init__()
 

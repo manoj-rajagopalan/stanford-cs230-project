@@ -381,7 +381,7 @@ def apply_cost_aggregation(cost_volume):
     return F.avg_pool2d(cost_volume, kernel_size=5, stride=1)
 
 
-def calc_cost_volume(settings, feature_vec_inner_prods, cost_volume_method, mask=None):
+def calc_cost_volume(settings, left_features, right_features, metric_tensor, mask=None):
     """
     Calculate the cost volume to generate predicted disparities.  Compute a
     batch matrix multiplication to compute inner-product over entire image and
@@ -391,7 +391,6 @@ def calc_cost_volume(settings, feature_vec_inner_prods, cost_volume_method, mask
         left_features (Tensor): left image features post forward pass through CNN.
         right_features (Tensor): right image features post forward pass through CNN.
         metric_tensor (Tensor): For 'diff_norm_sqr_gaussian' case, the metric to weight the norm.
-        cost_volume_method (string): 'inner_product_softmax' or 'diff_norm_sqr_gaussian'
         mask (, optional): mask
 
     Returns:
@@ -402,13 +401,13 @@ def calc_cost_volume(settings, feature_vec_inner_prods, cost_volume_method, mask
 
     inner_product, win_indices = [], []
     img_height, img_width = right_features.shape[2], right_features.shape[3]
-    logger.info("right feature shape : {}".format(right_feature.size()))
+    # logger.info("right feature shape : {}".format(right_features.size()))
     row_indices = torch.arange(0, img_width, dtype=torch.int64)
 
     for i in range(img_width):
-        logger.info("left feature shape before squeeze : {}".format(left_feature.size()))
+        # logger.info("left feature shape before squeeze : {}".format(left_features.size()))
         left_column_features = torch.squeeze(left_features[:, :, :, i])
-        logger.info("left feature shape after squeeze  : {}".format(left_column_features.size()))
+        # logger.info("left feature shape after squeeze  : {}".format(left_column_features.size()))
         start_win = max(0, i - settings.half_range)
         end_win = max(settings.disparity_range, settings.half_range + i + 1)
         start_win = start_win - max(0, end_win - img_width)  # was img_width.value
@@ -418,15 +417,15 @@ def calc_cost_volume(settings, feature_vec_inner_prods, cost_volume_method, mask
         win_indices_column = torch.unsqueeze(row_indices[start_win:end_win], 0)
         # logger.info("left feature shape      : {}".format(left_column_features.size()))
         # logger.info("right win feature shape : {}".format(right_win_features.size()))
-        if cost_volume_method == 'inner_product_softmax':
+        if settings.cost_volume_method == 'inner_product_softmax':
             inner_product_column = torch.einsum('ij,ijk->jk', left_column_features,
                                                 right_win_features)
 
-        else: # cost_volume_method == 'diff_norm_sqr_gaussian'
-            left_win_features = left_column_features.resize_as(right_win_features)
+        else: # settings.cost_volume_method == 'diff_norm_sqr_gaussian'
+            left_win_features = left_column_features.expand_as(right_win_features)
             diff_win_features = right_win_features - left_win_features
-            assert False, 'TODO'
-            inner_product_column = -torch.einsum('ij,ijk->jk', diff_win_features, diff_win_features)
+            metric_mm_diff = torch.einsum('if,fwh->iwh', metric_tensor, diff_win_features)
+            inner_product_column = -torch.einsum('fwh,fwh->wh', diff_win_features, metric_mm_diff)
             # note the negative sign - required for argmax that is taken in calling function (inference())
             # The classification probabilities are exp(-r^2 / variance) and here we are computing r^2
 
@@ -452,7 +451,6 @@ def inference(settings, left_features, right_features, post_process):
     Args:
         left_features (Tensor): left input cost volume.
         right_features (Tensor): right input cost volume.
-        loss_fn (string): 'inner_product_softmax' or 'diff_norm_gaussian'
         post_process (Bool): perform cost-volume aggregation or not
 
 
@@ -460,10 +458,10 @@ def inference(settings, left_features, right_features, post_process):
         disp_prediction (Tensor): disparity prediction.
 
     """
-    cost_volume, win_indices = calc_cost_volume(settings, left_features, right_features, settings.cost_volume_method)
+    cost_volume, win_indices = calc_cost_volume(settings, left_features, right_features)
     # logger.info("Cost Volume Shape : {}".format(cost_volume.size()))
     img_height, img_width = cost_volume.shape[1], cost_volume.shape[2]  # Now 1 x C X H x W, was 1 x H x W x C
-    if post_process:
+    if post_process and settings.cost_volume_method == 'inner_product_softmax'
         cost_volume = apply_cost_aggregation(cost_volume)
     cost_volume = torch.squeeze(cost_volume)
     # logger.info("Cost Volume Shape (post squeeze): {}".format(cost_volume.size()))
