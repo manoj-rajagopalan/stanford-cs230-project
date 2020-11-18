@@ -40,7 +40,7 @@ class CrossEntropyOfGaussian(torch.nn.Module):
 
         # pred = torch.exp(-feature_vec_diff_norm_sqr / variance)
         # log_pred = torch.log(pred)
-        log_pred = -diff_norm_sqr
+        log_pred = -feature_vec_diff_norm_sqr
         loss = -1.0 * torch.sum(labels * log_pred) / log_pred.size(0)
 
         return loss

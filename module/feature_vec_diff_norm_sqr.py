@@ -48,10 +48,8 @@ class FeatureVecDiffNormSqr(torch.nn.Module):
             and D feature-vectors (one per disparity candidate) for the right-patch.
           * There are B mini-batches of such data.           
         """
-        left_feature = torch.squeeze(left_feature)
-        right_feature = torch.squeeze(right_feature)
         left_feature = left_feature.expand_as(right_feature) # logically "copy" feature vector #Disparity-Bin times, per pixel
-        diff_feature = right_feature - left_feature
+        diff_feature = torch.squeeze(right_feature - left_feature)
         metric_diff = torch.einsum('if,bfd->bid', self.metric_tensor, diff_feature)
         diff_norm_sqr = torch.einsum('bfd,bfd->bd', diff_feature, metric_diff)
 

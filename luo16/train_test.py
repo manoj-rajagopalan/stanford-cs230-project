@@ -422,6 +422,7 @@ def calc_cost_volume(settings, left_features, right_features, metric_tensor, mas
                                                 right_win_features)
 
         else: # settings.cost_volume_method == 'diff_norm_sqr_gaussian'
+            left_column_features = torch.unsqueeze(left_column_features, 2)
             left_win_features = left_column_features.expand_as(right_win_features)
             diff_win_features = right_win_features - left_win_features
             metric_mm_diff = torch.einsum('if,fwh->iwh', metric_tensor, diff_win_features)
