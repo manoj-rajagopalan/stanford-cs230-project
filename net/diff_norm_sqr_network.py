@@ -1,4 +1,3 @@
-from siamese_network import SiameseNetwork
 from module.feature_vec_diff_norm_sqr import FeatureVecDiffNormSqr
 
 import torch.nn

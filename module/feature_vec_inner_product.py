@@ -1,6 +1,5 @@
 import torch
-from torch.nn
-import torch.nn.functional as F
+import torch.nn
 
 class FeatureVecInnerProduct(torch.nn.Module):
     """
