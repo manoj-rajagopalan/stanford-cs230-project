@@ -10,7 +10,7 @@ class DiffNormSqrNetwork(torch.nn.Module):
     def __init__(self, siamese_network):
         super(DiffNormSqrNetwork, self).__init__()
         self.siamese_network = siamese_network
-        self.feature_vec_inner_product = FeatureVecDiffNormSqr(self.siamese_network.FEATURE_VECTOR_SIZE)
+        self.feature_vec_diff_norm_sqr = FeatureVecDiffNormSqr(self.siamese_network.FEATURE_VECTOR_SIZE)
 
     def forward(self, left_patch, right_patch):
         left_feature, right_feature = self.siamese_network(left_patch, right_patch)
@@ -22,6 +22,6 @@ class DiffNormSqrNetwork(torch.nn.Module):
         return left_feature, right_feature
 
     def metric_tensor(self):
-        return next(self.feature_vec_inner_product.parameters())
+        return next(self.feature_vec_diff_norm_sqr.parameters())
 
 # /class DiffNormSqrNetwork
