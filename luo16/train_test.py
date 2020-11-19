@@ -388,45 +388,45 @@ def calc_cost_volume(settings, left_features, right_features, metric_tensor, mas
     obtain a cost volume.
 
     Args:
-        left_features (Tensor): left image features post forward pass through CNN.
-        right_features (Tensor): right image features post forward pass through CNN.
-        metric_tensor (Tensor): For 'diff_norm_sqr_gaussian' case, the metric to weight the norm.
+        left_features (1 x F x H x W Tensor): left image features post forward pass through CNN.
+        right_features (1 x F x H x W Tensor): right image features post forward pass through CNN.
+        metric_tensor (F x F Tensor): For 'diff_norm_sqr_gaussian' case, the metric to weight the norm.
         mask (, optional): mask
 
     Returns:
-        inner_product (Tensor): output from feature matching model, size
-        of tensor 1 x H x W x 201
+        inner_product (1 x H x W x D Tensor): output from feature matching model
 
     """
 
     inner_product, win_indices = [], []
     img_height, img_width = right_features.shape[2], right_features.shape[3]
+    # logger.info("left feature shape : {}".format(left_features.size()))
     # logger.info("right feature shape : {}".format(right_features.size()))
     row_indices = torch.arange(0, img_width, dtype=torch.int64)
 
     for i in range(img_width):
         # logger.info("left feature shape before squeeze : {}".format(left_features.size()))
-        left_column_features = torch.squeeze(left_features[:, :, :, i])
+        left_column_features = torch.squeeze(left_features[:, :, :, i]) # F x H
         # logger.info("left feature shape after squeeze  : {}".format(left_column_features.size()))
         start_win = max(0, i - settings.half_range)
         end_win = max(settings.disparity_range, settings.half_range + i + 1)
         start_win = start_win - max(0, end_win - img_width)  # was img_width.value
         end_win = min(img_width, end_win)
 
-        right_win_features = torch.squeeze(right_features[:, :, :, start_win:end_win])
+        right_win_features = torch.squeeze(right_features[:, :, :, start_win:end_win]) # F x H x D
         win_indices_column = torch.unsqueeze(row_indices[start_win:end_win], 0)
         # logger.info("left feature shape      : {}".format(left_column_features.size()))
         # logger.info("right win feature shape : {}".format(right_win_features.size()))
         if settings.cost_volume_method == 'inner_product_softmax':
-            inner_product_column = torch.einsum('ij,ijk->jk', left_column_features,
-                                                right_win_features)
+            inner_product_column = \
+                torch.einsum('fh,fhd->hd', left_column_features, right_win_features)
 
         else: # settings.cost_volume_method == 'diff_norm_sqr_gaussian'
-            left_column_features = torch.unsqueeze(left_column_features, 2)
-            left_win_features = left_column_features.expand_as(right_win_features)
-            diff_win_features = right_win_features - left_win_features
-            metric_mm_diff = torch.einsum('if,fwh->iwh', metric_tensor, diff_win_features)
-            inner_product_column = -torch.einsum('fwh,fwh->wh', diff_win_features, metric_mm_diff)
+            left_column_features = torch.unsqueeze(left_column_features, 2) # F x H x 1
+            #- left_win_features = left_column_features.expand_as(right_win_features)
+            diff_win_features = right_win_features - left_column_features # F x H x D
+            diffT_x_metric = torch.einsum('fhd,fg->ghd', diff_win_features, metric_tensor) # F x H x D
+            inner_product_column = -torch.einsum('fhd,fhd->hd', diffT_x_metric, diff_win_features) # H x D
             # note the negative sign - required for argmax that is taken in calling function (inference())
             # The classification probabilities are exp(-r^2 / variance) and here we are computing r^2
 
@@ -736,16 +736,18 @@ def main():
             right_image = F.pad(right_image, twoDimensionPad, "constant", 0)
             left_image = torch.unsqueeze(left_image, 0)
             right_image = torch.unsqueeze(right_image, 0)
-            # logger.info("Left image size  : {}".format(left_image.size()))
-            # logger.info("Right image size : {}".format(right_image.size()))
-            # left_feature, right_feature = model(left_image.to(device), right_image.to(device))
-            left_feature, right_feature = model.features(left_image.to(device), right_image.to(device))
-            # logger.info("Left feature size  : {}".format(left_feature.size()))
-            # logger.info("Right feature size : {}".format(right_feature.size()))
-            # logger.info("Left Feature on Cuda: {}".format(left_feature.get_device()))
-            disp_prediction = inference(settings, left_feature, right_feature, model.metric_tensor(), post_process=True)
-            error_dict[idx] = calc_error(disp_prediction.cpu(), disparity_ground_truth, idx)
-            disp_image = prediction_to_image(disp_prediction.cpu())
+            with torch.no_grad():
+                # logger.info("Left image size  : {}".format(left_image.size()))
+                # logger.info("Right image size : {}".format(right_image.size()))
+                # left_feature, right_feature = model(left_image.to(device), right_image.to(device))
+                left_feature, right_feature = model.features(left_image.to(device), right_image.to(device))
+                # logger.info("Left feature size  : {}".format(left_feature.size()))
+                # logger.info("Right feature size : {}".format(right_feature.size()))
+                # logger.info("Left Feature on Cuda: {}".format(left_feature.get_device()))
+                disp_prediction = inference(settings, left_feature, right_feature, model.metric_tensor(), post_process=True)
+                error_dict[idx] = calc_error(disp_prediction.cpu(), disparity_ground_truth, idx)
+                disp_image = prediction_to_image(disp_prediction.cpu())
+
             save_images([left_image_in.permute(1, 2, 0), disp_image], 1, ['left image', 'disparity'], settings.image_dir,
                         'disparity_{}.png'.format(idx))
             cv2.imwrite(os.path.join(settings.image_dir, (("00000" + str(idx))[-6:] + "_10.png")), np.array(disp_prediction.cpu()))
@@ -763,10 +765,11 @@ def main():
                 right_image = F.pad(right_image, twoDimensionPad, "constant", 0)
                 left_image = torch.unsqueeze(left_image, 0)
                 right_image = torch.unsqueeze(right_image, 0)
-                left_feature, right_feature = model.features(left_image.to(device), right_image.to(device))
-                disp_prediction = inference(settings, left_feature, right_feature, model.metric_tensor(), post_process=True)
-                error_dict[idx] = calc_error(disp_prediction.cpu(), disparity_ground_truth, idx)
-                disp_image = prediction_to_image(disp_prediction.cpu())
+                with torch.no_grad():
+                    left_feature, right_feature = model.features(left_image.to(device), right_image.to(device))
+                    disp_prediction = inference(settings, left_feature, right_feature, model.metric_tensor(), post_process=True)
+                    error_dict[idx] = calc_error(disp_prediction.cpu(), disparity_ground_truth, idx)
+                    disp_image = prediction_to_image(disp_prediction.cpu())
                 save_images([left_image_in.permute(1, 2, 0), disp_image], 1, ['left image', 'disparity'],
                             settings.image_dir,
                             'disparity_{}.png'.format(idx))
